@@ -20,6 +20,7 @@ import EditQuiz from "./components/EditQuiz";
 import QuizTest from "./components/QuizTest";
 import QuizHistoryPage from "./components/QuizHistoryPage";
 import QuizPage from "./components/QuizPage";
+import WebsiteUsers from "./components/WebsiteUsers";
 
 
 const App = () => {
@@ -32,112 +33,20 @@ const App = () => {
 
           {/* Admin Routes with Layout */}
           <Route element={<PrivateRoute allowedRoles={["admin"]} />}>
-            <Route
-              path="/admin"
-              element={
-                <DashboardLayout role="admin">
-                  <AdminDashboard />
-                </DashboardLayout>
-              }
-            />
-            <Route
-              path="/upload-video"
-              element={
-                <DashboardLayout role="admin">
-                  <UploadVideo />
-                </DashboardLayout>
-              }
-            />
-            <Route
-              path="/videos"
-              element={
-                <DashboardLayout role="admin">
-                  <VideoList />
-                </DashboardLayout>
-              }
-            />
-            <Route
-              path="/editVideo"
-              element={
-                <DashboardLayout role="admin">
-                  <EditVideoList />
-                </DashboardLayout>
-              }
-            />
-            <Route
-              path="/uploadCertificate"
-              element={
-                <DashboardLayout role="admin">
-                  <UploadCertificate />
-                </DashboardLayout>
-              }
-            />
-            <Route
-              path="/editCertificate"
-              element={
-                <DashboardLayout role="admin">
-                  <EditCertificate />
-                </DashboardLayout>
-              }
-            />
-            <Route
-              path="/failedLogin"
-              element={
-                <DashboardLayout role="admin">
-                  <FailedLogin />
-                </DashboardLayout>
-              }
-            />
-            {/* hmark----------------- */}
-            <Route
-              path="/qrgeneration"
-              element={
-                <DashboardLayout role="admin">
-                  <QRGeneration />
-                </DashboardLayout>
-              }
-            />
-            {/* Quiz Management Routes */}
-            <Route
-              path="/quizzes"
-              element={
-                <DashboardLayout role="admin">
-                  <QuizList />
-                </DashboardLayout>
-              }
-            />
-            <Route
-              path="/quizzes/create"
-              element={
-                <DashboardLayout role="admin">
-                  <CreateQuiz />
-                </DashboardLayout>
-              }
-            />
-            <Route
-              path="/quizzes/edit/:quizId"
-              element={
-                <DashboardLayout role="admin">
-                  <EditQuiz />
-                </DashboardLayout>
-              }
-            />
-            <Route
-              path="/quizzes/:quizId/questions"
-              element={
-                <DashboardLayout role="admin">
-                  <AddQuestions />
-                </DashboardLayout>
-              }
-            />
-            <Route
-              path="/quiz/test/:quizId"
-              element={
-                <DashboardLayout role="admin">
-                  <QuizTest />
-                </DashboardLayout>
-              }
-            />
+            <Route path="/admin" element={<AdminDashboard />} />
+            <Route path="/upload-video" element={<UploadVideo />} />
+            <Route path="/videos" element={<VideoList />} />
+            <Route path="/editVideo" element={<EditVideoList />} />
+            <Route path="/uploadCertificate" element={<UploadCertificate />} />
+            <Route path="/editCertificate" element={<EditCertificate />} />
+            <Route path="/failedLogin" element={<FailedLogin />} />
+            <Route path="/qrgeneration" element={<QRGeneration />} />
+            <Route path="/quizzes" element={<QuizList />} />
+            <Route path="/quizzes/create" element={<CreateQuiz />} />
+            <Route path="/quizzes/edit/:quizId" element={<EditQuiz />} />
+            <Route path="/quizzes/:quizId/questions" element={<AddQuestions />} />
+            <Route path="/quiz/test/:quizId" element={<QuizTest />} />
+            <Route path="/website-users" element={<WebsiteUsers />} />
           </Route>
 
           {/* Shared Routes with Layout */}

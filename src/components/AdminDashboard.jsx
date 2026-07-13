@@ -49,6 +49,7 @@ const AdminManagement = () => {
     password: "",
     batch: "",
     role: "student",
+    allowed_device_count: 1,
   });
   const [editUser, setEditUser] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -76,10 +77,11 @@ const AdminManagement = () => {
   const filteredFailedLogins = failedLogins
     .filter((log) => {
       // Search filter
+      const searchLower = searchTerm.toLowerCase();
       const matchesSearch =
         searchTerm === "" ||
-        log.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        log.user_id.toLowerCase().includes(searchTerm.toLowerCase());
+        (log.name && String(log.name).toLowerCase().includes(searchLower)) ||
+        (log.user_id && String(log.user_id).toLowerCase().includes(searchLower));
 
       // Date filter
       const logDate = new Date(log.attempted_at);
@@ -181,11 +183,14 @@ const AdminManagement = () => {
 
     // Apply search filter
     if (searchTerm.trim() !== "") {
+      const searchLower = searchTerm.toLowerCase();
       filtered = filtered.filter(
         (user) =>
-          user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          user.user_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          user.batch.toLowerCase().includes(searchTerm.toLowerCase())
+          (user.name && String(user.name).toLowerCase().includes(searchLower)) ||
+          (user.user_name && String(user.user_name).toLowerCase().includes(searchLower)) ||
+          (Array.isArray(user.batch)
+            ? user.batch.some((b) => b && String(b).toLowerCase().includes(searchLower))
+            : user.batch && String(user.batch).toLowerCase().includes(searchLower))
       );
     }
 
@@ -196,7 +201,11 @@ const AdminManagement = () => {
 
     // Apply batch filter
     if (batchFilter !== "all") {
-      filtered = filtered.filter((user) => user.batch === batchFilter);
+      filtered = filtered.filter((user) =>
+        Array.isArray(user.batch)
+          ? user.batch.some((b) => b != null && String(b) === String(batchFilter))
+          : user.batch != null && String(user.batch) === String(batchFilter)
+      );
     }
 
     // Apply status filter
@@ -210,7 +219,14 @@ const AdminManagement = () => {
 
   // Get unique batches for filter dropdown
   const getUniqueBatches = () => {
-    const batches = new Set(users.map((user) => user.batch));
+    const batches = new Set();
+    users.forEach((user) => {
+      if (Array.isArray(user.batch)) {
+        user.batch.forEach((b) => b && batches.add(String(b)));
+      } else if (user.batch != null && user.batch !== "") {
+        batches.add(String(user.batch));
+      }
+    });
     return Array.from(batches).sort();
   };
 
@@ -222,12 +238,36 @@ const AdminManagement = () => {
     setStatusFilter("all");
   };
 
+  const cleanString = (str) => {
+    if (!str) return "";
+    return String(str).trim().replace(/^["']+|["']+$/g, "");
+  };
+
+  const cleanBatch = (batchInput) => {
+    if (!batchInput) return [];
+    if (Array.isArray(batchInput)) {
+      return batchInput.map(b => cleanString(b)).filter(Boolean);
+    }
+    return String(batchInput)
+      .split(",")
+      .map(b => cleanString(b))
+      .filter(Boolean);
+  };
+
   // Create new user
   const createUser = async () => {
     if (!newUser.name || !newUser.user_name || !newUser.password) {
       toast.error("All fields are required!");
       return;
     }
+
+    const cleanedUser = {
+      ...newUser,
+      name: cleanString(newUser.name),
+      user_name: cleanString(newUser.user_name),
+      batch: cleanBatch(newUser.batch),
+      allowed_device_count: Number(newUser.allowed_device_count) || 1,
+    };
 
     try {
       const res = await fetch(`${API_URL}/create`, {
@@ -236,7 +276,7 @@ const AdminManagement = () => {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify(newUser),
+        body: JSON.stringify(cleanedUser),
       });
 
       const data = await res.json();
@@ -248,6 +288,7 @@ const AdminManagement = () => {
         password: "",
         batch: "",
         role: "student",
+        allowed_device_count: 1,
       });
       setShowCreateModal(false);
     } catch (error) {
@@ -299,6 +340,15 @@ const AdminManagement = () => {
   const editExistingUser = async () => {
     if (!editUser) return;
 
+    const cleanedEditUser = {
+      ...editUser,
+      name: cleanString(editUser.name),
+      user_name: cleanString(editUser.user_name),
+      batch: cleanBatch(editUser.batch),
+      device_id: cleanString(editUser.device_id),
+      allowed_device_count: Number(editUser.allowed_device_count) || 1,
+    };
+
     try {
       const res = await fetch(`${API_URL}/users/${editUser.id}`, {
         method: "PUT",
@@ -306,7 +356,7 @@ const AdminManagement = () => {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify(editUser),
+        body: JSON.stringify(cleanedEditUser),
       });
 
       const data = await res.json();
@@ -574,8 +624,11 @@ const AdminManagement = () => {
                         <th className="px-6 py-4 text-left text-sm font-medium text-gray-700">
                           Status
                         </th>
+                        {/* <th className="px-6 py-4 text-left text-sm font-medium text-gray-700">
+                          Allowed Devices
+                        </th> */}
                         <th className="px-6 py-4 text-left text-sm font-medium text-gray-700">
-                          Device ID
+                          Registered Devices
                         </th>
                         <th className="px-6 py-4 text-left text-sm font-medium text-gray-700">
                           Actions
@@ -596,7 +649,7 @@ const AdminManagement = () => {
                             <td className="px-6 py-4">
                               <div className="flex items-center gap-2">
                                 <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center text-white text-sm font-medium">
-                                  {user.name.charAt(0).toUpperCase()}
+                                  {user.name ? String(user.name).charAt(0).toUpperCase() : "?"}
                                 </div>
                                 {user.name}
                               </div>
@@ -605,9 +658,19 @@ const AdminManagement = () => {
                               {user.user_name}
                             </td>
                             <td className="px-6 py-4">
-                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                                {user.batch}
-                              </span>
+                              <div className="flex flex-wrap gap-1">
+                                {Array.isArray(user.batch) ? (
+                                  user.batch.map((b, i) => (
+                                    <span key={i} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                      {b}
+                                    </span>
+                                  ))
+                                ) : (
+                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                    {user.batch || "N/A"}
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="px-6 py-4">
                               <span
@@ -631,12 +694,18 @@ const AdminManagement = () => {
                                 {user.active === "yes" ? "Active" : "Inactive"}
                               </span>
                             </td>
+                            {/* <td className="px-6 py-4 text-gray-900 font-medium">
+                              {user.allowed_device_count || 1}
+                            </td> */}
                             <td className="px-6 py-4">
-                              <span className="text-gray-500 text-sm">
-                                {user.device_id
-                                  ? `${user.device_id.substring(0, 8)}...`
-                                  : "N/A"}
-                              </span>
+                              <div className="flex flex-col">
+                                {/* <span className="text-sm font-medium text-gray-800">
+                                  {user.device_id ? String(user.device_id).split(",").filter(Boolean).length : 0} / {user.allowed_device_count || 1} Registered
+                                </span> */}
+                                <span className="text-xs text-gray-500 truncate max-w-[120px]" title={user.device_id || "None"}>
+                                  {user.device_id || "None"}
+                                </span>
+                              </div>
                             </td>
                             <td className="px-6 py-4">
                               <div className="flex gap-2">
@@ -712,7 +781,7 @@ const AdminManagement = () => {
                       <div className="flex items-start justify-between mb-3">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center text-white text-sm font-medium">
-                            {user.name.charAt(0).toUpperCase()}
+                            {user.name ? String(user.name).charAt(0).toUpperCase() : "?"}
                           </div>
                           <div>
                             <h3 className="font-medium text-gray-900">
@@ -755,11 +824,19 @@ const AdminManagement = () => {
                       <div className="grid grid-cols-2 gap-3 text-sm">
                         <div>
                           <p className="text-gray-500">Batch</p>
-                          <p className="font-medium">
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
-                              {user.batch}
-                            </span>
-                          </p>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {Array.isArray(user.batch) ? (
+                              user.batch.map((b, i) => (
+                                <span key={i} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                                  {b}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                                {user.batch || "N/A"}
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <div>
                           <p className="text-gray-500">Role</p>
@@ -790,12 +867,21 @@ const AdminManagement = () => {
                           </p>
                         </div>
                         <div>
-                          <p className="text-gray-500">Device ID</p>
+                          <p className="text-gray-500">Allowed Devices</p>
                           <p className="font-medium">
-                            {user.device_id
-                              ? `${user.device_id.substring(0, 8)}...`
-                              : "N/A"}
+                            {user.allowed_device_count || 1}
                           </p>
+                        </div>
+                        <div>
+                          <p className="text-gray-500">Registered Devices</p>
+                          <div className="flex flex-col mt-1">
+                            <span className="font-medium text-sm text-gray-800">
+                              {user.device_id ? String(user.device_id).split(",").filter(Boolean).length : 0} / {user.allowed_device_count || 1} Registered
+                            </span>
+                            <span className="text-xs text-gray-500 truncate max-w-[150px]" title={user.device_id || "None"}>
+                              {user.device_id || "None"}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1285,13 +1371,28 @@ const AdminManagement = () => {
                 <input
                   type="text"
                   placeholder="Enter batch"
-                  value={newUser.batch}
+                  value={Array.isArray(newUser.batch) ? newUser.batch.join(", ") : newUser.batch}
                   onChange={(e) =>
                     setNewUser({ ...newUser, batch: e.target.value })
                   }
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
               </div>
+              {/* <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Allowed Device Count
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  placeholder="Enter allowed device count"
+                  value={newUser.allowed_device_count}
+                  onChange={(e) =>
+                    setNewUser({ ...newUser, allowed_device_count: e.target.value })
+                  }
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div> */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Role
@@ -1396,21 +1497,36 @@ const AdminManagement = () => {
                 <input
                   type="text"
                   placeholder="Enter batch"
-                  value={editUser.batch}
+                  value={Array.isArray(editUser.batch) ? editUser.batch.join(", ") : editUser.batch}
                   onChange={(e) =>
                     setEditUser({ ...editUser, batch: e.target.value })
                   }
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
               </div>
+              {/* <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Allowed Device Count
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  placeholder="Enter allowed device count"
+                  value={editUser.allowed_device_count || 1}
+                  onChange={(e) =>
+                    setEditUser({ ...editUser, allowed_device_count: e.target.value })
+                  }
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div> */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                 Device Id
+                 Registered Device IDs (Comma separated)
                 </label>
                 <input
                   type="text"
-                  placeholder="Enter batch"
-                  value={editUser.device_id}
+                  placeholder="Enter device IDs or clear to reset"
+                  value={editUser.device_id || ""}
                   onChange={(e) =>
                     setEditUser({ ...editUser, device_id: e.target.value })
                   }

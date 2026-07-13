@@ -51,7 +51,8 @@ const Sidebar = ({ role }) => {
     { path: "/editCertificate", icon: FileEdit, label: "Certificate" },
     // { path: "/failedLogin", icon: AlertTriangle, label: "Failed Logins" },
     { path: "/qrgeneration", icon: QrCode, label: "QR Generate" },
-    { path: "/quizzes", icon: FileQuestion, label: "Quiz" }, // Removed children array
+    { path: "/quizzes", icon: FileQuestion, label: "Quiz" },
+    { path: "/website-users", icon: Users, label: "Website Users" },
   ];
 
   const studentMenuItems = [

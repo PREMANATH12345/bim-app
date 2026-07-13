@@ -12,6 +12,7 @@ const Login = () => {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const API_URL = import.meta.env.VITE_URL;
+  
 
   const passwordRef = useRef(null);
   const usernameRef = useRef(null);
@@ -168,7 +169,7 @@ const Login = () => {
                 Username
               </label>
               <div className="relative group">
-                <User className="absolute left-3 top-1/2 transform -translate-y-1/2 text-blue-300 w-5 h-5 transition-colors group-focus-within:text-blue-400" />
+              {/*  <User className="absolute left-3 top-1/2 transform -translate-y-1/2 text-blue-300 w-5 h-5 transition-colors group-focus-within:text-blue-400" /> */}
                 <input
                   ref={usernameRef}
                   type="text"
@@ -181,7 +182,7 @@ const Login = () => {
                       passwordRef.current?.focus();
                     }
                   }}
-                  className="w-full pl-11 pr-4 py-3 bg-white/5 backdrop-blur-sm border border-white/20 rounded-lg text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all duration-300"
+                  className="w-full pl-2 pr-4 py-3 bg-white/5 backdrop-blur-sm border border-white/20 rounded-lg text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all duration-300"
                   required
                 />
               </div>
@@ -193,7 +194,7 @@ const Login = () => {
                 Password
               </label>
               <div className="relative group">
-                <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 text-blue-300 w-5 h-5 transition-colors group-focus-within:text-blue-400" />
+              {/*  <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 text-blue-300 w-5 h-5 transition-colors group-focus-within:text-blue-400" />*/}
                 <input
                   ref={passwordRef}
                   type={showPassword ? "text" : "password"}
@@ -206,7 +207,7 @@ const Login = () => {
                       handleLogin(e);
                     }
                   }}
-                  className="w-full pl-11 pr-12 py-3 bg-white/5 backdrop-blur-sm border border-white/20 rounded-lg text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all duration-300"
+                  className="w-full pl-2 pr-12 py-3 bg-white/5 backdrop-blur-sm border border-white/20 rounded-lg text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all duration-300"
                   required
                 />
                 <button

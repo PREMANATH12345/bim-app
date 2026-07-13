@@ -72,8 +72,9 @@ const QuizList = () => {
     let filtered = [...quizzes];
 
     if (searchTerm.trim() !== "") {
+      const searchLower = searchTerm.toLowerCase();
       filtered = filtered.filter(
-        (quiz) => (quiz.title?.toLowerCase() || '').includes(searchTerm.toLowerCase())
+        (quiz) => quiz.title && String(quiz.title).toLowerCase().includes(searchLower)
       );
     }
 

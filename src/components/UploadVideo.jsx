@@ -62,6 +62,7 @@ const UploadVideo = () => {
   const [allVideos, setAllVideos] = useState([]); // Stores all videos from API
   const [filteredVideos, setFilteredVideos] = useState([]); // Stores filtered videos for display
   const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState(""); // NEW: For full-page alerts
   const [error, setError] = useState("");
 
   // State for modals
@@ -74,8 +75,8 @@ const UploadVideo = () => {
     title: "",
     videoUrl: "",
     description: "",
-    quiz_id: "", // NEW: Add this line
-
+    quiz_id: "",
+    videoFile: null,
   });
 
   const [editFormData, setEditFormData] = useState({
@@ -85,6 +86,7 @@ const UploadVideo = () => {
     video_url: "",
     description: "",
     quiz_id: "", // NEW: Add this line
+    videoFile: null, // NEW: Added for file upload
   });
 
   // Search, filter and pagination state
@@ -183,20 +185,60 @@ const UploadVideo = () => {
 
   // Handle upload form changes
   const handleUploadChange = (e) => {
-    const { name, value } = e.target;
-    setUploadFormData((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
+    const { name, value, files } = e.target;
+    if (name === "videoFile") {
+      setUploadFormData((prev) => ({
+        ...prev,
+        videoFile: files[0] || null,
+      }));
+    } else {
+      setUploadFormData((prev) => ({
+        ...prev,
+        [name]: value,
+      }));
+    }
   };
 
   // Handle edit form changes
   const handleEditChange = (e) => {
-    const { name, value } = e.target;
-    setEditFormData((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
+    const { name, value, files } = e.target;
+    if (name === "videoFile") {
+      setEditFormData((prev) => ({
+        ...prev,
+        videoFile: files[0] || null,
+      }));
+    } else {
+      setEditFormData((prev) => ({
+        ...prev,
+        [name]: value,
+      }));
+    }
+  };
+
+  // Function to upload video to remote server
+  const handleRemoteVideoUpload = async (file, folderName) => {
+    const formData = new FormData();
+    formData.append("video", file);
+    formData.append("folder", folderName); // Send batch/folder name to PHP
+
+    try {
+      const response = await fetch("https://www.bimeducation.in/couse-video-upload/upload.php", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) throw new Error("Remote upload failed");
+      
+      const data = await response.json();
+      if (data.status === "success") {
+        return data.url;
+      } else {
+        throw new Error(data.message || "Failed to upload to remote server");
+      }
+    } catch (error) {
+      console.error("Error in remote upload:", error);
+      throw error;
+    }
   };
 
   // Handle video upload
@@ -206,23 +248,39 @@ const UploadVideo = () => {
     if (
       !uploadFormData.batch ||
       !uploadFormData.title ||
-      !uploadFormData.videoUrl ||
+      (!uploadFormData.videoUrl && !uploadFormData.videoFile) ||
       !uploadFormData.description
     ) {
-      toast.error("Please fill in all fields.");
+      toast.error("Please fill in all fields (Title, Batch, Description and Video).");
       return;
     }
 
-    const dataToSend = new FormData();
-    dataToSend.append("batch", uploadFormData.batch);
-    dataToSend.append("video", uploadFormData.videoUrl);
-    dataToSend.append("title", uploadFormData.title);
-    dataToSend.append("description", uploadFormData.description);
-    dataToSend.append("quiz_id", uploadFormData.quiz_id || ""); // NEW: Add this line
-
-
     setLoading(true);
+    setLoadingMessage("Uploading video to server... This may take a few minutes depending on file size.");
     try {
+      let finalVideoUrl = uploadFormData.videoUrl;
+
+      // Step 1: Upload file if present
+      if (uploadFormData.videoFile) {
+        toast.loading("Uploading video to server...", { id: "uploading" });
+        try {
+          finalVideoUrl = await handleRemoteVideoUpload(uploadFormData.videoFile, uploadFormData.batch);
+          toast.success("Video file uploaded successfully!", { id: "uploading" });
+        } catch (uploadErr) {
+          toast.error("File upload failed: " + uploadErr.message, { id: "uploading" });
+          setLoading(false);
+          return;
+        }
+      }
+
+      // Step 2: Save to Database
+      const dataToSend = new FormData();
+      dataToSend.append("batch", uploadFormData.batch);
+      dataToSend.append("video", finalVideoUrl);
+      dataToSend.append("title", uploadFormData.title);
+      dataToSend.append("description", uploadFormData.description);
+      dataToSend.append("quiz_id", uploadFormData.quiz_id || "");
+
       const res = await fetch(`${API_URL}/videos/upload`, {
         method: "POST",
         headers: {
@@ -234,22 +292,25 @@ const UploadVideo = () => {
       const data = await res.json();
 
       if (res.ok) {
-        toast.success("Video uploaded successfully!");
+        toast.success("Video record saved successfully!");
         setUploadFormData({
           batch: "",
           title: "",
           videoUrl: "",
           description: "",
+          videoFile: null,
+          quiz_id: "",
         });
         setShowUploadModal(false);
         fetchVideos(); // Refresh the video list
       } else {
-        toast.error("Error uploading video: " + (data.message || "Unknown error"));
+        toast.error("Error saving video: " + (data.message || "Unknown error"));
       }
     } catch (error) {
-      toast.error("Error uploading video: " + error.message);
+      toast.error("Error: " + error.message);
     } finally {
       setLoading(false);
+      setLoadingMessage("");
     }
   };
 
@@ -262,6 +323,7 @@ const UploadVideo = () => {
       video_url: video.video_url,
       description: video.description,
       quiz_id: video.quiz_id || "", // NEW: Add this line
+      videoFile: null, // Reset file when opening
     });
     setShowEditModal(true);
   };
@@ -271,22 +333,50 @@ const UploadVideo = () => {
     e.preventDefault();
     if (!editFormData.id) return;
 
+    setLoading(true);
+    setLoadingMessage("Updating video and uploading new file if selected...");
     try {
+      let finalVideoUrl = editFormData.video_url;
+
+      // Step 1: Upload file if present
+      if (editFormData.videoFile) {
+        toast.loading("Uploading new video to server...", { id: "uploading" });
+        try {
+          finalVideoUrl = await handleRemoteVideoUpload(editFormData.videoFile, editFormData.batch);
+          toast.success("New video file uploaded successfully!", { id: "uploading" });
+        } catch (uploadErr) {
+          toast.error("File upload failed: " + uploadErr.message, { id: "uploading" });
+          setLoading(false);
+          return;
+        }
+      }
+
+      // Step 2: Save to Database
       const res = await fetch(`${API_URL}/videos/editVideo`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify(editFormData),
+        body: JSON.stringify({
+          ...editFormData,
+          video_url: finalVideoUrl, // Use the new URL if uploaded
+        }),
       });
 
       const data = await res.json();
-      toast.success(data.message);
-      setShowEditModal(false);
-      fetchVideos(); // Refresh the video list
+      if (res.ok) {
+        toast.success(data.message || "Video updated successfully!");
+        setShowEditModal(false);
+        fetchVideos(); // Refresh the video list
+      } else {
+        toast.error("Error updating video: " + (data.message || "Unknown error"));
+      }
     } catch (error) {
-      toast.error("Error updating video: " + error);
+      toast.error("Error updating video: " + error.message);
+    } finally {
+      setLoading(false);
+      setLoadingMessage("");
     }
   };
 
@@ -481,7 +571,7 @@ const UploadVideo = () => {
             </div>
           </div>
 
-          {loading && <Loading />}
+          {loading && <Loading message={loadingMessage} />}
           {error && (
             <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6 text-red-700">
               {error}
@@ -809,24 +899,65 @@ const UploadVideo = () => {
             />
           </div>
 
-          {/* Video URL */}
-          <div>
-            <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
-              <Link className="w-4 h-4" />
-              Video URL
-            </label>
-            <input
-              type="url"
-              name="videoUrl"
-              value={uploadFormData.videoUrl}
-              onChange={handleUploadChange}
-              placeholder="https://example.com/video.mp4"
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
-              required
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              Enter a direct link to the video file or streaming URL
-            </p>
+          {/* Video Selection (URL or File) */}
+          <div className="space-y-4">
+            <div>
+              <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
+                <Upload className="w-4 h-4 text-blue-600" />
+                Option 1: Upload Video File
+              </label>
+              <input
+                type="file"
+                name="videoFile"
+                accept="video/*"
+                onChange={handleUploadChange}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 file:mr-4 file:py-1 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+              />
+              {uploadFormData.videoFile && (
+                <div className="flex items-center justify-between mt-2 px-3 py-1.5 bg-blue-50 border border-blue-100 rounded-lg">
+                  <p className="text-xs text-blue-700 flex items-center gap-1.5 font-medium truncate">
+                    <Video size={14} className="flex-shrink-0" /> Selected: {uploadFormData.videoFile.name}
+                  </p>
+                  <button 
+                    type="button" 
+                    onClick={() => setUploadFormData(prev => ({...prev, videoFile: null}))}
+                    className="text-xs text-red-600 hover:text-red-800 font-bold px-2 py-0.5 hover:bg-red-50 rounded transition-colors"
+                  >
+                    CLEAR
+                  </button>
+                </div>
+              )}
+            </div>
+            
+            <div className="relative py-2">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-200"></div>
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-white px-2 text-gray-400 font-bold italic">OR</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
+                <Link className="w-4 h-4 text-purple-600" />
+                Option 2: Direct Video Link (URL)
+              </label>
+              <input
+                type="url"
+                name="videoUrl"
+                value={uploadFormData.videoUrl}
+                onChange={handleUploadChange}
+                disabled={uploadFormData.videoFile !== null}
+                placeholder="https://example.com/video.mp4"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 disabled:bg-gray-100 disabled:text-gray-400 cursor-not-allowed"
+              />
+              <p className="text-xs text-gray-500 mt-1 italic">
+                {uploadFormData.videoFile 
+                  ? "Clear the uploaded file above to use a direct link instead." 
+                  : "Enter a direct link to the video file or streaming URL"}
+              </p>
+            </div>
           </div>
           {/* hmark---------- */}
           {/* NEW: Add this entire Quiz dropdown section after Video URL field */}
@@ -970,21 +1101,65 @@ const UploadVideo = () => {
             />
           </div>
 
-          {/* Video URL */}
-          <div>
-            <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
-              <Link className="w-4 h-4" />
-              Video URL
-            </label>
-            <input
-              type="url"
-              name="video_url"
-              value={editFormData.video_url}
-              onChange={handleEditChange}
-              placeholder="https://example.com/video.mp4"
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
-              required
-            />
+          {/* Video Selection (URL or File) */}
+          <div className="space-y-4">
+            <div>
+              <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
+                <Upload className="w-4 h-4 text-blue-600" />
+                Option 1: Upload New Video File
+              </label>
+              <input
+                type="file"
+                name="videoFile"
+                accept="video/*"
+                onChange={handleEditChange}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 file:mr-4 file:py-1 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+              />
+              {editFormData.videoFile && (
+                <div className="flex items-center justify-between mt-2 px-3 py-1.5 bg-blue-50 border border-blue-100 rounded-lg">
+                  <p className="text-xs text-blue-700 flex items-center gap-1.5 font-medium truncate">
+                    <Video size={14} className="flex-shrink-0" /> Selected: {editFormData.videoFile.name}
+                  </p>
+                  <button 
+                    type="button" 
+                    onClick={() => setEditFormData(prev => ({...prev, videoFile: null}))}
+                    className="text-xs text-red-600 hover:text-red-800 font-bold px-2 py-0.5 hover:bg-red-50 rounded transition-colors"
+                  >
+                    CLEAR
+                  </button>
+                </div>
+              )}
+            </div>
+            
+            <div className="relative py-2">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-200"></div>
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-white px-2 text-gray-400 font-bold italic">OR</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
+                <Link className="w-4 h-4 text-purple-600" />
+                Option 2: Direct Video Link (URL)
+              </label>
+              <input
+                type="url"
+                name="video_url"
+                value={editFormData.video_url}
+                onChange={handleEditChange}
+                disabled={editFormData.videoFile !== null}
+                placeholder="https://example.com/video.mp4"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 disabled:bg-gray-100 disabled:text-gray-400 cursor-not-allowed"
+              />
+              <p className="text-xs text-gray-500 mt-1 italic">
+                {editFormData.videoFile 
+                  ? "Clear the new file above to keep the current link or use a different one." 
+                  : "Current link will be kept unless you upload a new file or change this URL."}
+              </p>
+            </div>
           </div>
 
 
