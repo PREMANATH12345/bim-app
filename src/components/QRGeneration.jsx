@@ -33,10 +33,11 @@ const QRGeneration = () => {
     toast.success("QR Code downloaded!");
   };
 
-  // ✅ Reset QR when editing text
+  // ✅ Update text and show QR live, no click needed
   const handleChange = (e) => {
-    setQrText(e.target.value);
-    setGeneratedQRText(""); // Reset preview
+    const value = e.target.value;
+    setQrText(value);
+    setGeneratedQRText(value.trim()); // live preview
   };
 
   // ✅ Clear input and generated QR

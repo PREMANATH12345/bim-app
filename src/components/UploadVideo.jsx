@@ -63,6 +63,7 @@ const UploadVideo = () => {
   const [filteredVideos, setFilteredVideos] = useState([]); // Stores filtered videos for display
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState(""); // NEW: For full-page alerts
+  const [uploadProgress, setUploadProgress] = useState(0); // S3 upload progress (0-100%)
   const [error, setError] = useState("");
 
   // State for modals
@@ -216,29 +217,67 @@ const UploadVideo = () => {
   };
 
   // Function to upload video to remote server
-  const handleRemoteVideoUpload = async (file, folderName) => {
-    const formData = new FormData();
-    formData.append("video", file);
-    formData.append("folder", folderName); // Send batch/folder name to PHP
+  // Function to upload video to AWS S3 bucket via presigned URL
+  const handleRemoteVideoUpload = async (file, folderName, onProgress) => {
+    // 1. Request presigned S3 upload URL from backend
+    const presignRes = await fetch(`${API_URL}/videos/s3-upload-url`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        fileName: file.name,
+        fileType: file.type || "video/mp4",
+        batch: folderName,
+      }),
+    });
 
-    try {
-      const response = await fetch("https://www.bimeducation.in/couse-video-upload/upload.php", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) throw new Error("Remote upload failed");
-      
-      const data = await response.json();
-      if (data.status === "success") {
-        return data.url;
-      } else {
-        throw new Error(data.message || "Failed to upload to remote server");
-      }
-    } catch (error) {
-      console.error("Error in remote upload:", error);
-      throw error;
+    if (!presignRes.ok) {
+      const errData = await presignRes.json().catch(() => ({}));
+      throw new Error(errData.error || "Failed to obtain S3 upload authorization");
     }
+
+    const { uploadUrl, fileUrl } = await presignRes.json();
+
+    // 2. Upload file directly to AWS S3 using XMLHttpRequest for progress tracking
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", uploadUrl, true);
+      xhr.setRequestHeader("Content-Type", file.type || "video/mp4");
+
+      if (xhr.upload) {
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            const percentComplete = Math.round((event.loaded / event.total) * 100);
+            if (onProgress) {
+              onProgress(percentComplete);
+            }
+          }
+        };
+      }
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(fileUrl);
+        } else {
+          console.error("S3 Upload Error Response:", xhr.status, xhr.responseText);
+          reject(new Error(`AWS S3 upload failed with status ${xhr.status}. Check bucket CORS and permissions.`));
+        }
+      };
+
+      xhr.onerror = (e) => {
+        console.error("S3 Upload Network/CORS Error:", e, "Status:", xhr.status, "Response:", xhr.responseText);
+        reject(new Error("Network error during AWS S3 upload. Please verify CORS configuration on coursevideo-bimeducation S3 bucket."));
+      };
+
+      xhr.ontimeout = () => {
+        console.error("S3 Upload Timeout");
+        reject(new Error("AWS S3 upload timed out."));
+      };
+
+      xhr.send(file);
+    });
   };
 
   // Handle video upload
@@ -256,19 +295,28 @@ const UploadVideo = () => {
     }
 
     setLoading(true);
-    setLoadingMessage("Uploading video to server... This may take a few minutes depending on file size.");
+    setUploadProgress(0);
+    setLoadingMessage("Preparing video upload to AWS S3...");
     try {
       let finalVideoUrl = uploadFormData.videoUrl;
 
-      // Step 1: Upload file if present
+      // Step 1: Upload file to AWS S3 if present
       if (uploadFormData.videoFile) {
-        toast.loading("Uploading video to server...", { id: "uploading" });
+        toast.loading("Uploading video to AWS S3...", { id: "uploading" });
         try {
-          finalVideoUrl = await handleRemoteVideoUpload(uploadFormData.videoFile, uploadFormData.batch);
-          toast.success("Video file uploaded successfully!", { id: "uploading" });
+          finalVideoUrl = await handleRemoteVideoUpload(
+            uploadFormData.videoFile,
+            uploadFormData.batch,
+            (percent) => {
+              setUploadProgress(percent);
+              setLoadingMessage(`Uploading to AWS S3: ${percent}%...`);
+            }
+          );
+          toast.success("Video uploaded to AWS S3 successfully!", { id: "uploading" });
         } catch (uploadErr) {
-          toast.error("File upload failed: " + uploadErr.message, { id: "uploading" });
+          toast.error("S3 upload failed: " + uploadErr.message, { id: "uploading" });
           setLoading(false);
+          setUploadProgress(0);
           return;
         }
       }
@@ -311,6 +359,7 @@ const UploadVideo = () => {
     } finally {
       setLoading(false);
       setLoadingMessage("");
+      setUploadProgress(0);
     }
   };
 
@@ -325,6 +374,7 @@ const UploadVideo = () => {
       quiz_id: video.quiz_id || "", // NEW: Add this line
       videoFile: null, // Reset file when opening
     });
+    setUploadProgress(0);
     setShowEditModal(true);
   };
 
@@ -334,19 +384,28 @@ const UploadVideo = () => {
     if (!editFormData.id) return;
 
     setLoading(true);
-    setLoadingMessage("Updating video and uploading new file if selected...");
+    setUploadProgress(0);
+    setLoadingMessage("Updating video...");
     try {
       let finalVideoUrl = editFormData.video_url;
 
-      // Step 1: Upload file if present
+      // Step 1: Upload new file to AWS S3 if present
       if (editFormData.videoFile) {
-        toast.loading("Uploading new video to server...", { id: "uploading" });
+        toast.loading("Uploading new video to AWS S3...", { id: "uploading" });
         try {
-          finalVideoUrl = await handleRemoteVideoUpload(editFormData.videoFile, editFormData.batch);
-          toast.success("New video file uploaded successfully!", { id: "uploading" });
+          finalVideoUrl = await handleRemoteVideoUpload(
+            editFormData.videoFile,
+            editFormData.batch,
+            (percent) => {
+              setUploadProgress(percent);
+              setLoadingMessage(`Uploading to AWS S3: ${percent}%...`);
+            }
+          );
+          toast.success("New video file uploaded to AWS S3!", { id: "uploading" });
         } catch (uploadErr) {
-          toast.error("File upload failed: " + uploadErr.message, { id: "uploading" });
+          toast.error("S3 upload failed: " + uploadErr.message, { id: "uploading" });
           setLoading(false);
+          setUploadProgress(0);
           return;
         }
       }
@@ -360,7 +419,7 @@ const UploadVideo = () => {
         },
         body: JSON.stringify({
           ...editFormData,
-          video_url: finalVideoUrl, // Use the new URL if uploaded
+          video_url: finalVideoUrl, // Use the new S3 URL if uploaded
         }),
       });
 
@@ -377,6 +436,7 @@ const UploadVideo = () => {
     } finally {
       setLoading(false);
       setLoadingMessage("");
+      setUploadProgress(0);
     }
   };
 
@@ -1008,6 +1068,24 @@ const UploadVideo = () => {
           </button>
 
           {/* hmark-------- quiz dropdown end */}
+          {/* S3 Upload Progress Bar */}
+          {loading && uploadProgress > 0 && (
+            <div className="pt-2 space-y-1.5">
+              <div className="flex justify-between text-xs font-semibold text-gray-700">
+                <span className="flex items-center gap-1.5 text-blue-600">
+                  <Upload className="w-3.5 h-3.5 animate-bounce" /> Uploading to AWS S3...
+                </span>
+                <span>{uploadProgress}%</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
+                <div
+                  className="bg-gradient-to-r from-blue-600 to-purple-600 h-2.5 rounded-full transition-all duration-300 ease-out"
+                  style={{ width: `${uploadProgress}%` }}
+                ></div>
+              </div>
+            </div>
+          )}
+
           {/* Submit Button */}
           <div className="pt-4">
             <button
@@ -1205,6 +1283,24 @@ const UploadVideo = () => {
               <Eye className="w-5 h-5 text-gray-500" />
             </button>
           </div>
+
+          {/* S3 Upload Progress Bar */}
+          {loading && uploadProgress > 0 && (
+            <div className="pt-2 space-y-1.5">
+              <div className="flex justify-between text-xs font-semibold text-gray-700">
+                <span className="flex items-center gap-1.5 text-blue-600">
+                  <Upload className="w-3.5 h-3.5 animate-bounce" /> Uploading to AWS S3...
+                </span>
+                <span>{uploadProgress}%</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
+                <div
+                  className="bg-gradient-to-r from-blue-600 to-purple-600 h-2.5 rounded-full transition-all duration-300 ease-out"
+                  style={{ width: `${uploadProgress}%` }}
+                ></div>
+              </div>
+            </div>
+          )}
 
           {/* Submit Button */}
           <div className="pt-4 flex gap-3">

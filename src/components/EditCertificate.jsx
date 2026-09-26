@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useRef, useState, useEffect } from "react";
 import {
   Search,
   Edit,
@@ -22,9 +22,11 @@ import Sidebar from "./Sidebar";
 import TopBar from "./TopBar";
 import Loading from "./Loading";
 import toast from "react-hot-toast";
+import AdminMobileNavBar from "./AdminMobileNavBar";
 
 
 const EditCertificate = () => {
+  const contentRef = useRef(null);
   // State for certificate listing
   const [searchQuery, setSearchQuery] = useState("");
   const [certificates, setCertificates] = useState([]);
@@ -106,7 +108,14 @@ const EditCertificate = () => {
 
   // Get unique courses for filter dropdown
   const getUniqueCourses = () => {
-    const courses = new Set(certificates.map((cert) => cert.course_name));
+    const courses = new Set();
+    certificates.forEach((cert) => {
+      const cleaned = (cert.course_name || "")
+        .toString()
+        .trim()
+        .replace(/^["']+|["']+$/g, "");
+      if (cleaned && cleaned !== "-") courses.add(cleaned);
+    });
     return Array.from(courses).sort();
   };
 
@@ -339,7 +348,7 @@ const EditCertificate = () => {
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar />
 
-        <div className="flex-1 p-4 lg:p-6 overflow-auto">
+        <div ref={contentRef} className="flex-1 p-4 lg:p-6 pb-24 lg:pb-6 overflow-auto">
           {/* Header */}
           <div className="mb-6">
             <div className="flex items-center justify-between mb-2">
@@ -348,7 +357,7 @@ const EditCertificate = () => {
                   <Award className="w-6 h-6 text-white" />
                 </div>
                 <h1 className="text-2xl lg:text-3xl font-bold text-gray-800">
-                  Certificate Management
+                  Certificate
                 </h1>
               </div>
               <button
@@ -359,7 +368,7 @@ const EditCertificate = () => {
                 className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white py-2 px-4 rounded-lg hover:from-blue-700 hover:to-purple-700 transition-all duration-200 font-medium"
               >
                 <Plus size={18} />
-                Create Certificate
+                Create
               </button>
             </div>
             <p className="text-gray-600">
@@ -987,6 +996,7 @@ const EditCertificate = () => {
           </div>
         </div>
       )}
+      <AdminMobileNavBar scrollContainerRef={contentRef} />
     </div>
   );
 };
