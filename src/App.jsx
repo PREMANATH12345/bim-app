@@ -152,6 +152,7 @@ import QuizTest from "./components/QuizTest";
 import QuizHistoryPage from "./components/QuizHistoryPage";
 import QuizPage from "./components/QuizPage";
 import WebsiteUsers from "./components/WebsiteUsers";
+import AdminSettings from "./components/AdminSettings";
 import VideoAnalytics from "./components/VideoAnalytics";
 
 const App = () => {
@@ -182,6 +183,7 @@ const App = () => {
             <Route path="/quizzes/:quizId/questions" element={<AddQuestions />} />
             <Route path="/quiz/test/:quizId" element={<QuizTest />} />
             <Route path="/website-users" element={<WebsiteUsers />} />
+            <Route path="/admin-settings" element={<AdminSettings />} />
           </Route>
 
           {/* Shared Routes with Layout */}

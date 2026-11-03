@@ -18,6 +18,8 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  Camera,
+  Upload,
 } from "lucide-react";
 import { jwtDecode } from "jwt-decode";
 import Sidebar from "./Sidebar";
@@ -25,8 +27,222 @@ import TopBar from "./TopBar";
 import Loading from "./Loading";
 import toast from "react-hot-toast";
 import AdminMobileNavBar from "./AdminMobileNavBar";
+import { advanceFaceLivenessChallenge, createFaceLivenessChallenge } from "../utils/faceLiveness";
 
 const API_URL = import.meta.env.VITE_URL;
+const API_ORIGIN = String(API_URL || "").replace(/\/api\/?$/, "");
+const getProfileImageUrl = (imagePath) => `${API_ORIGIN}${imagePath}`;
+const createUserFormData = (values, profileImage) => {
+  const formData = new FormData();
+  formData.append("user_data", JSON.stringify(values));
+  if (profileImage) formData.append("profile_image", profileImage);
+  return formData;
+};
+let faceApiModulePromise;
+
+const ProfileImagePicker = ({ id, file, currentImage, onChange }) => {
+  const [previewUrl, setPreviewUrl] = useState("");
+
+  useEffect(() => {
+    if (!file) {
+      setPreviewUrl(currentImage ? getProfileImageUrl(currentImage) : "");
+      return undefined;
+    }
+    const objectUrl = URL.createObjectURL(file);
+    setPreviewUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [file, currentImage]);
+
+  return (
+    <div className="flex items-center gap-3">
+      {previewUrl ? (
+        <img src={previewUrl} alt="User profile preview" className="h-14 w-14 rounded-full border border-gray-200 object-cover" />
+      ) : (
+        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-gray-100 text-gray-400">
+          <User className="h-6 w-6" aria-hidden="true" />
+        </div>
+      )}
+      <div className="min-w-0">
+        <input
+          id={id}
+          type="file"
+          accept="image/*"
+          onChange={(event) => onChange(event.target.files?.[0] || null)}
+          className="sr-only"
+        />
+        <label htmlFor={id} className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+          <Upload className="h-4 w-4" aria-hidden="true" />
+          Choose image
+        </label>
+        <p className="mt-1 max-w-56 truncate text-xs text-gray-500">
+          {file?.name || (currentImage ? "Current profile image" : "No image selected")}
+        </p>
+      </div>
+    </div>
+  );
+};
+
+const loadFaceApiModels = () => {
+  if (!faceApiModulePromise) {
+    faceApiModulePromise = import("@vladmandic/face-api")
+      .then(async (faceapi) => {
+        await Promise.all([
+          faceapi.nets.ssdMobilenetv1.loadFromUri("/models"),
+          faceapi.nets.faceLandmark68Net.loadFromUri("/models"),
+          faceapi.nets.faceRecognitionNet.loadFromUri("/models"),
+        ]);
+        return faceapi;
+      })
+      .catch((error) => {
+        faceApiModulePromise = null;
+        throw error;
+      });
+  }
+  return faceApiModulePromise;
+};
+
+const FaceEnrollmentCapture = ({ onDescriptorChange }) => {
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const faceApiRef = useRef(null);
+  const detectingRef = useRef(false);
+  const livenessRef = useRef(createFaceLivenessChallenge());
+  const livenessPassedAtRef = useRef(0);
+  const [cameraStream, setCameraStream] = useState(null);
+  const [modelsReady, setModelsReady] = useState(false);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [latestDescriptor, setLatestDescriptor] = useState(null);
+  const [status, setStatus] = useState("Starting camera...");
+
+  useEffect(() => {
+    let active = true;
+    const startCamera = async () => {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error("Camera access requires HTTPS or localhost.");
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { facingMode: { ideal: "user" } },
+        });
+        if (!active) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        streamRef.current = stream;
+        setCameraStream(stream);
+        setModelsLoading(true);
+        setStatus("Loading face recognition models...");
+        faceApiRef.current = await loadFaceApiModels();
+        if (active) {
+          setModelsReady(true);
+          setStatus("Position the face in the camera and wait for detection.");
+        }
+      } catch (error) {
+        if (active) setStatus(error.message || "Could not start face recognition.");
+      } finally {
+        if (active) setModelsLoading(false);
+      }
+    };
+
+    startCamera();
+    return () => {
+      active = false;
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (videoRef.current && cameraStream) {
+      videoRef.current.srcObject = cameraStream;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [cameraStream]);
+
+  useEffect(() => {
+    if (!cameraStream || !modelsReady) return undefined;
+    let active = true;
+    const detectFace = async () => {
+      const video = videoRef.current;
+      if (!active || detectingRef.current || !video || video.readyState < 2 || !video.videoWidth) return;
+      detectingRef.current = true;
+      try {
+        const detections = await faceApiRef.current
+          .detectAllFaces(video, new faceApiRef.current.SsdMobilenetv1Options())
+          .withFaceLandmarks()
+          .withFaceDescriptors();
+        if (!active) return;
+        if (detections.length !== 1) {
+          setLatestDescriptor(null);
+          livenessPassedAtRef.current = 0;
+          livenessRef.current = createFaceLivenessChallenge();
+          setStatus(detections.length ? "Only one face can be in frame during enrollment." : "No face detected. Look at the camera and move into the frame.");
+          return;
+        }
+
+        const detection = detections[0];
+        if (livenessRef.current.complete && Date.now() - livenessPassedAtRef.current > 15000) {
+          livenessRef.current = createFaceLivenessChallenge();
+          livenessPassedAtRef.current = 0;
+          setLatestDescriptor(null);
+        }
+        const challengeWasComplete = livenessRef.current.complete;
+        const liveness = advanceFaceLivenessChallenge(livenessRef.current, detection.landmarks);
+        if (liveness.complete && !challengeWasComplete) {
+          setLatestDescriptor(Array.from(detection.descriptor));
+          livenessPassedAtRef.current = Date.now();
+        }
+        setStatus(liveness.status);
+      } catch {
+        if (active) setStatus("Face detection failed. Check camera access and model files.");
+      } finally {
+        detectingRef.current = false;
+      }
+    };
+    const intervalId = window.setInterval(detectFace, 180);
+    detectFace();
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [cameraStream, modelsReady]);
+
+  return (
+    <div className="mt-3 rounded-lg border border-gray-200 p-3">
+      {cameraStream && (
+        <video ref={videoRef} autoPlay muted playsInline aria-label="Face enrollment camera preview" className="aspect-video w-full max-w-sm bg-gray-950 object-cover" />
+      )}
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+        <p role="status" className="text-xs text-gray-600">
+          {modelsLoading ? "Loading face recognition models..." : status}
+        </p>
+        <button
+          type="button"
+          disabled={!modelsReady}
+          onClick={() => {
+            if (!latestDescriptor || Date.now() - livenessPassedAtRef.current > 15000) {
+              setStatus("Blink once OR turn your head to either side, then face forward. Select Enroll face after the live check passes.");
+              return;
+            }
+            onDescriptorChange(latestDescriptor);
+          }}
+          className="inline-flex items-center gap-2 rounded-md bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-gray-300"
+        >
+          <Camera className="h-4 w-4" />
+          Enroll face
+        </button>
+      </div>
+    </div>
+  );
+};
+
+const isUserFaceConfigured = (user) => {
+  const status = String(user.face_status || user.faceStatus || "").toLowerCase();
+  return ["confirmed", "configured", "enrolled"].includes(status)
+    || user.face_configured === true
+    || user.faceConfigured === true;
+};
 
 const AdminManagement = () => {
   const contentRef = useRef(null);
@@ -55,11 +271,18 @@ const AdminManagement = () => {
   const [editUser, setEditUser] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [createFaceEnrollmentEnabled, setCreateFaceEnrollmentEnabled] = useState(false);
+  const [createFaceDescriptor, setCreateFaceDescriptor] = useState(null);
+  const [createProfileImage, setCreateProfileImage] = useState(null);
+  const [editFaceEnrollmentEnabled, setEditFaceEnrollmentEnabled] = useState(false);
+  const [editFaceDescriptor, setEditFaceDescriptor] = useState(null);
+  const [editProfileImage, setEditProfileImage] = useState(null);
 
   // Filters state
   const [roleFilter, setRoleFilter] = useState("all");
   const [batchFilter, setBatchFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [faceStatusFilter, setFaceStatusFilter] = useState("all");
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -307,9 +530,16 @@ const AdminManagement = () => {
       filtered = filtered.filter((user) => user.active === statusFilter);
     }
 
+    if (faceStatusFilter !== "all") {
+      const isEnrolled = faceStatusFilter === "enrolled";
+      filtered = filtered.filter(
+        (user) => isUserFaceConfigured(user) === isEnrolled,
+      );
+    }
+
     setFilteredUsers(filtered);
     setCurrentPage(1); // Reset to first page when filters change
-  }, [searchTerm, roleFilter, batchFilter, statusFilter, users]);
+  }, [searchTerm, roleFilter, batchFilter, statusFilter, faceStatusFilter, users]);
 
   // Get unique batches for filter dropdown
   const getUniqueBatches = () => {
@@ -330,6 +560,7 @@ const AdminManagement = () => {
     setRoleFilter("all");
     setBatchFilter("all");
     setStatusFilter("all");
+    setFaceStatusFilter("all");
   };
 
   const cleanString = (str) => {
@@ -622,19 +853,25 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
       fullAccessBatches: userFullBatches,
       allowed_device_count: Number(newUser.allowed_device_count) || 1,
       accessVideo: computeFinalAccessVideo(newUser.batch, newUser.accessVideo, userFullBatches),
+      face_descriptor: createFaceEnrollmentEnabled ? createFaceDescriptor : null,
     };
+
+    if (createFaceEnrollmentEnabled && !createFaceDescriptor) {
+      toast.error("Enroll a face or turn off face registration before creating the user.");
+      return;
+    }
 
     try {
       const res = await fetch(`${API_URL}/create`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify(cleanedUser),
+        body: createUserFormData(cleanedUser, createProfileImage),
       });
 
       const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to create user");
       toast.success(data.message);
       fetchUsers();
       setNewUser({
@@ -647,6 +884,9 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
         accessVideo: [],
         fullAccessBatches: [],
       });
+      setCreateFaceEnrollmentEnabled(false);
+      setCreateFaceDescriptor(null);
+      setCreateProfileImage(null);
       setShowCreateModal(false);
     } catch (error) {
       toast.error("Error creating user: " + error.message);
@@ -696,6 +936,10 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
   // Edit user
   const editExistingUser = async () => {
     if (!editUser) return;
+    if (editFaceEnrollmentEnabled && !editFaceDescriptor) {
+      toast.error("Enroll a face or turn off face registration before updating the user.");
+      return;
+    }
 
     const assignedBatches = cleanBatch(editUser.batch);
     const userFullBatches = (
@@ -717,26 +961,40 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
         editUser.accessVideo,
         userFullBatches,
       ),
+      ...(editFaceEnrollmentEnabled
+        ? { face_descriptor: editFaceDescriptor }
+        : {}),
     };
 
     try {
       const res = await fetch(`${API_URL}/users/${editUser.id}`, {
         method: "PUT",
         headers: {
-          "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify(cleanedEditUser),
+        body: createUserFormData(cleanedEditUser, editProfileImage),
       });
 
       const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to update user");
       toast.success(data.message);
       setEditUser(null);
+      setEditFaceEnrollmentEnabled(false);
+      setEditFaceDescriptor(null);
+      setEditProfileImage(null);
       setShowEditModal(false);
       fetchUsers();
     } catch (error) {
       toast.error("Error updating user: " + error.message);
     }
+  };
+
+  const openFaceEnrollment = (user) => {
+    setEditUser(user);
+    setEditProfileImage(null);
+    setEditFaceEnrollmentEnabled(true);
+    setEditFaceDescriptor(null);
+    setShowEditModal(true);
   };
 
   // Pagination logic
@@ -868,7 +1126,7 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
           {activeTab === "users" && (
             <>
               {/* Filters Section */}
-              <div className="mb-6 grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="mb-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                 {/* Search Bar */}
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -931,6 +1189,23 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
                     <option value="all">All Statuses</option>
                     <option value="yes">Active</option>
                     <option value="no">Inactive</option>
+                  </select>
+                </div>
+
+                {/* Face Status Filter */}
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Shield className="h-5 w-5 text-gray-400" />
+                  </div>
+                  <select
+                    value={faceStatusFilter}
+                    onChange={(e) => setFaceStatusFilter(e.target.value)}
+                    className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg leading-5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    aria-label="Filter by face registration status"
+                  >
+                    <option value="all">All Face Statuses</option>
+                    <option value="enrolled">Enrolled</option>
+                    <option value="not_configured">Not Configured</option>
                   </select>
                 </div>
               </div>
@@ -997,6 +1272,9 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
                         <th className="px-6 py-4 text-left text-sm font-medium text-gray-700">
                           Status
                         </th>
+                        <th className="px-6 py-4 text-left text-sm font-medium text-gray-700">
+                          Face Status
+                        </th>
                         {/* <th className="px-6 py-4 text-left text-sm font-medium text-gray-700">
                           Allowed Devices
                         </th> */}
@@ -1021,11 +1299,13 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
                           >
                             <td className="px-6 py-4">
                               <div className="flex items-center gap-2">
-                                <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center text-white text-sm font-medium">
-                                  {user.name
-                                    ? String(user.name).charAt(0).toUpperCase()
-                                    : "?"}
-                                </div>
+                                {user.profile_image ? (
+                                  <img src={getProfileImageUrl(user.profile_image)} alt="" className="h-8 w-8 rounded-full object-cover" />
+                                ) : (
+                                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-r from-blue-500 to-purple-500 text-sm font-medium text-white">
+                                    {user.name ? String(user.name).charAt(0).toUpperCase() : "?"}
+                                  </div>
+                                )}
                                 {user.name}
                               </div>
                             </td>
@@ -1100,6 +1380,28 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
                                 {user.active === "yes" ? "Active" : "Inactive"}
                               </span>
                             </td>
+                            <td className="px-6 py-4">
+                              <span
+                                className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                  isUserFaceConfigured(user)
+                                    ? "bg-green-100 text-green-800"
+                                    : "bg-gray-100 text-gray-700"
+                                }`}
+                              >
+                                {isUserFaceConfigured(user) ? (
+                                  "Enrolled"
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => openFaceEnrollment(user)}
+                                    className="font-medium text-blue-700 underline underline-offset-2 hover:text-blue-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 rounded"
+                                    aria-label={`Register face for ${user.name || user.user_name}`}
+                                  >
+                                    Not Configured
+                                  </button>
+                                )}
+                              </span>
+                            </td>
                             {/* <td className="px-6 py-4 text-gray-900 font-medium">
                               {user.allowed_device_count || 1}
                             </td> */}
@@ -1121,6 +1423,9 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
                                 <button
                                   onClick={() => {
                                     setEditUser(user);
+                                    setEditProfileImage(null);
+                                    setEditFaceEnrollmentEnabled(false);
+                                    setEditFaceDescriptor(null);
                                     setShowEditModal(true);
                                   }}
                                   className="p-2 text-blue-600 hover:bg-blue-50 rounded transition-colors"
@@ -1163,7 +1468,7 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
                       ) : (
                         <tr>
                           <td
-                            colSpan="7"
+                            colSpan="8"
                             className="px-6 py-12 text-center text-gray-500"
                           >
                             No users found
@@ -1189,11 +1494,13 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
                     >
                       <div className="flex items-start justify-between mb-3">
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center text-white text-sm font-medium">
-                            {user.name
-                              ? String(user.name).charAt(0).toUpperCase()
-                              : "?"}
-                          </div>
+                          {user.profile_image ? (
+                            <img src={getProfileImageUrl(user.profile_image)} alt="" className="h-10 w-10 rounded-full object-cover" />
+                          ) : (
+                            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-r from-blue-500 to-purple-500 text-sm font-medium text-white">
+                              {user.name ? String(user.name).charAt(0).toUpperCase() : "?"}
+                            </div>
+                          )}
                           <div>
                             <h3 className="font-medium text-gray-900">
                               {user.name}
@@ -1207,6 +1514,9 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
                           <button
                             onClick={() => {
                               setEditUser(user);
+                              setEditProfileImage(null);
+                              setEditFaceEnrollmentEnabled(false);
+                              setEditFaceDescriptor(null);
                               setShowEditModal(true);
                             }}
                             className="p-1 text-blue-600 hover:bg-blue-50 rounded transition-colors"
@@ -1277,6 +1587,31 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
                               }`}
                             >
                               {user.active === "yes" ? "Active" : "Inactive"}
+                            </span>
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-gray-500">Face Status</p>
+                          <p className="font-medium">
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded text-xs ${
+                                isUserFaceConfigured(user)
+                                  ? "bg-green-100 text-green-800"
+                                  : "bg-gray-100 text-gray-700"
+                              }`}
+                            >
+                              {isUserFaceConfigured(user) ? (
+                                "Enrolled"
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => openFaceEnrollment(user)}
+                                  className="font-medium text-blue-700 underline underline-offset-2 hover:text-blue-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 rounded"
+                                  aria-label={`Register face for ${user.name || user.user_name}`}
+                                >
+                                  Not Configured
+                                </button>
+                              )}
                             </span>
                           </p>
                         </div>
@@ -1735,7 +2070,12 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
               </h3>
               <button
                 type="button"
-                onClick={() => setShowCreateModal(false)}
+                onClick={() => {
+                  setShowCreateModal(false);
+                  setCreateFaceEnrollmentEnabled(false);
+                  setCreateFaceDescriptor(null);
+                  setCreateProfileImage(null);
+                }}
                 className="text-gray-400 hover:text-gray-600 p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
               >
                 <X size={20} />
@@ -1750,6 +2090,11 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
               className="flex flex-col flex-1 overflow-hidden"
             >
               <div className="p-4 sm:p-6 space-y-4 overflow-y-auto flex-1">
+                <ProfileImagePicker
+                  id="create-user-profile-image"
+                  file={createProfileImage}
+                  onChange={setCreateProfileImage}
+                />
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1">
                     Name
@@ -1810,6 +2155,31 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
                       )}
                     </button>
                   </div>
+                </div>
+                <div className="rounded-lg border border-gray-200 p-3">
+                  <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-gray-800">
+                    <input
+                      type="checkbox"
+                      checked={createFaceEnrollmentEnabled}
+                      onChange={(e) => {
+                        setCreateFaceEnrollmentEnabled(e.target.checked);
+                        setCreateFaceDescriptor(null);
+                      }}
+                      className="h-4 w-4 rounded border-gray-300 text-emerald-700 focus:ring-emerald-600"
+                    />
+                    Register face now (optional)
+                  </label>
+                  <p className="mt-1 text-xs text-gray-500">
+                    The student must consent and be present for camera capture.
+                  </p>
+                  {createFaceEnrollmentEnabled && (
+                    <>
+                      <FaceEnrollmentCapture onDescriptorChange={setCreateFaceDescriptor} />
+                      <p className="mt-2 text-xs font-medium text-emerald-800" role="status">
+                        {createFaceDescriptor ? "Face enrolled and ready to save with this account." : "No face enrolled yet."}
+                      </p>
+                    </>
+                  )}
                 </div>
                 <div className="relative" ref={createBatchBoxRef}>
                   <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1">
@@ -2217,7 +2587,12 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
               <div className="p-4 border-t border-gray-100 flex justify-end gap-3 flex-shrink-0 bg-gray-50/80 rounded-b-2xl">
                 <button
                   type="button"
-                  onClick={() => setShowCreateModal(false)}
+                  onClick={() => {
+                    setShowCreateModal(false);
+                    setCreateFaceEnrollmentEnabled(false);
+                    setCreateFaceDescriptor(null);
+                    setCreateProfileImage(null);
+                  }}
                   className="px-4 py-2.5 text-gray-700 bg-white border border-gray-300 rounded-xl hover:bg-gray-50 transition-colors text-sm font-medium"
                 >
                   Cancel
@@ -2242,7 +2617,12 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
               <h3 className="text-lg font-bold text-gray-800">Edit User</h3>
               <button
                 type="button"
-                onClick={() => setShowEditModal(false)}
+                onClick={() => {
+                  setShowEditModal(false);
+                  setEditFaceEnrollmentEnabled(false);
+                  setEditFaceDescriptor(null);
+                  setEditProfileImage(null);
+                }}
                 className="text-gray-400 hover:text-gray-600 p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
               >
                 <X size={20} />
@@ -2257,6 +2637,12 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
               className="flex flex-col flex-1 overflow-hidden"
             >
               <div className="p-4 sm:p-6 space-y-4 overflow-y-auto flex-1">
+                <ProfileImagePicker
+                  id="edit-user-profile-image"
+                  file={editProfileImage}
+                  currentImage={editUser.profile_image}
+                  onChange={setEditProfileImage}
+                />
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1">
                     Name
@@ -2313,6 +2699,35 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
                       )}
                     </button>
                   </div>
+                </div>
+
+                <div className="rounded-lg border border-gray-200 p-3">
+                  <p className="text-sm font-medium text-gray-800">
+                    Face status: {isUserFaceConfigured(editUser) ? "Enrolled" : "Not Configured"}
+                  </p>
+                  <label className="mt-2 flex cursor-pointer items-center gap-2 text-sm font-medium text-gray-800">
+                    <input
+                      type="checkbox"
+                      checked={editFaceEnrollmentEnabled}
+                      onChange={(e) => {
+                        setEditFaceEnrollmentEnabled(e.target.checked);
+                        setEditFaceDescriptor(null);
+                      }}
+                      className="h-4 w-4 rounded border-gray-300 text-emerald-700 focus:ring-emerald-600"
+                    />
+                    Update face recognition
+                  </label>
+                  {editFaceEnrollmentEnabled && (
+                    <>
+                      <p className="mt-1 text-xs text-gray-500">
+                        The selected account holder must consent and be present for camera capture.
+                      </p>
+                      <FaceEnrollmentCapture onDescriptorChange={setEditFaceDescriptor} />
+                      <p className="mt-2 text-xs font-medium text-emerald-800" role="status">
+                        {editFaceDescriptor ? "New face enrolled and ready to save." : "Capture and enroll a face to replace the current enrollment."}
+                      </p>
+                    </>
+                  )}
                 </div>
 
                 <div className="relative" ref={editBatchBoxRef}>
@@ -2736,7 +3151,12 @@ const computeFinalAccessVideo = (userBatch, currentAccessVideo, fullBatches = []
               <div className="p-4 border-t border-gray-100 flex justify-end gap-3 flex-shrink-0 bg-gray-50/80 rounded-b-2xl">
                 <button
                   type="button"
-                  onClick={() => setShowEditModal(false)}
+                  onClick={() => {
+                    setShowEditModal(false);
+                    setEditFaceEnrollmentEnabled(false);
+                    setEditFaceDescriptor(null);
+                    setEditProfileImage(null);
+                  }}
                   className="px-4 py-2.5 text-gray-700 bg-white border border-gray-300 rounded-xl hover:bg-gray-50 transition-colors text-sm font-medium"
                 >
                   Cancel

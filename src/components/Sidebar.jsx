@@ -229,6 +229,7 @@ import {
   LayoutDashboard,
   ClipboardList,
   MessageSquare,
+  Settings
 } from "lucide-react";
 
 const Sidebar = ({ role, activeSection, onSectionChange }) => {
@@ -273,6 +274,7 @@ const Sidebar = ({ role, activeSection, onSectionChange }) => {
     { path: "/quizzes", icon: FileQuestion, label: "Quiz" },
     { path: "/website-users", icon: Users, label: "Website Users" },
     { path: "/admin-messages", icon: MessageSquare, label: "Messages" },
+    { path: "/admin-settings", icon: Settings, label: "Settings" },
   ];
 
   // Student items switch the content area inside the /student page instead of

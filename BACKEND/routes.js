@@ -72,14 +72,21 @@
 
 
 import express from "express";
+import multer from "multer";
+import fs from "fs";
+import path from "path";
+import { randomUUID } from "crypto";
+import { fileURLToPath } from "url";
 import { authenticateToken } from "./middleware/authMiddleware.js";
 import { createUser } from "./controllers/userController.js";
 import { toggleUserStatus } from "./controllers/userController.js";
 import { getUsers } from "./controllers/userController.js";
 import { deleteUser } from "./controllers/userController.js";
 import { getMyAccess } from "./controllers/userController.js";
+import { enrollMyFace, getMyFaceEnrollmentStatus, removeMyFaceEnrollment } from "./controllers/userController.js";
 
-import { loginUser } from "./controllers/authController.js";
+import { faceLoginUser, linkCurrentTrustedFaceDevice, loginUser, trustedFaceLogin, unlinkCurrentTrustedFaceDevice } from "./controllers/authController.js";
+import { getLoginMethod, getTrustedFaceDevices, removeTrustedFaceDevice, requireLoginMethod, requireTrustedFaceMode, saveLoginMethod, setTrustedFaceDeviceEnabled } from "./controllers/authSettingsController.js";
 import { editUser } from "./controllers/userController.js";
 import { getFailedLogins } from "./controllers/failedLogin.js";
 import { UserName } from "./controllers/UserDetect.js";
@@ -118,13 +125,51 @@ import {
 
 console.log("ROUTE")
 const router = express.Router();
-router.put("/users/:id", authenticateToken, editUser);
-router.post("/create", authenticateToken, createUser);
+const profileImageDirectory = path.join(path.dirname(fileURLToPath(import.meta.url)), "uploads", "user-images");
+const profileImageExtensions = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+};
+const profileImageUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, callback) => {
+      fs.mkdirSync(profileImageDirectory, { recursive: true });
+      callback(null, profileImageDirectory);
+    },
+    filename: (_req, file, callback) => {
+      callback(null, `${randomUUID()}${profileImageExtensions[file.mimetype]}`);
+    },
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => {
+    if (!profileImageExtensions[file.mimetype]) {
+      return callback(new Error("Choose a JPG, PNG, WEBP, or GIF profile picture"));
+    }
+    callback(null, true);
+  },
+});
+
+router.put("/users/:id", authenticateToken, profileImageUpload.single("profile_image"), editUser);
+router.post("/create", authenticateToken, profileImageUpload.single("profile_image"), createUser);
 router.get("/users/me/access", authenticateToken, getMyAccess);
+router.get("/users/me/face-enrollment", authenticateToken, getMyFaceEnrollmentStatus);
+router.put("/users/me/face-enrollment", authenticateToken, enrollMyFace);
+router.delete("/users/me/face-enrollment", authenticateToken, removeMyFaceEnrollment);
+router.get("/users/me/trusted-face-devices", authenticateToken, getTrustedFaceDevices);
+router.post("/users/me/trusted-face-devices", authenticateToken, requireTrustedFaceMode, linkCurrentTrustedFaceDevice);
+router.patch("/users/me/trusted-face-devices/:id", authenticateToken, setTrustedFaceDeviceEnabled);
+router.delete("/users/me/trusted-face-devices/:id", authenticateToken, removeTrustedFaceDevice);
 router.get("/users", authenticateToken, getUsers);
 router.put("/toggleUserStatus/:id/status", authenticateToken, toggleUserStatus);
 router.delete("/delete/:id", authenticateToken, deleteUser);
-router.post("/login", loginUser);
+router.post("/login", requireLoginMethod(["password", "both"]), loginUser);
+router.post("/login/face", requireLoginMethod(["face", "both"]), faceLoginUser);
+router.post("/login/face/trusted", requireLoginMethod(["face", "both"]), requireTrustedFaceMode, trustedFaceLogin);
+router.post("/login/face/unlink-trusted", unlinkCurrentTrustedFaceDevice);
+router.get("/login-method", getLoginMethod);
+router.put("/settings/login-method", authenticateToken, saveLoginMethod);
 router.get("/failed-logins",authenticateToken, getFailedLogins);
 router.post("/name", UserName)
 router.get("/userLogs",authenticateToken, getUserLogs);

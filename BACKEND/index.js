@@ -21,7 +21,7 @@ app.use(express.json({ limit: "1gb" }));
 app.use(express.urlencoded({ extended: true, limit: "1gb" }));
 app.use(
   cors({
-    origin: "*", // Allow requests from your frontend
+    origin: ['http://localhost:5174', 'http://127.0.0.1:5174'], // Allow requests from your frontend
     methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
     credentials: true,
     optionsSuccessStatus: 204,  
@@ -53,4 +53,5 @@ app.use((err, req, res, next) => {
 
 // Start Server
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
+// app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`✅ Server running on port ${PORT}`));

@@ -33,18 +33,34 @@ const safeParse = (field) => {
   return [String(field)];
 };
 
+const parseMultipartValue = (value) => {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+};
+
 // Create a new user
 export const createUser = (req, res) => {
+  const userData = parseMultipartValue(req.body?.user_data) || req.body || {};
   const {
     name,
     user_name,
     password,
-    batch,
+    batch: rawBatch,
     role,
-    accessVideo,
-    fullAccessBatches,
-    allowed_device_count
-  } = req.body;
+    accessVideo: rawAccessVideo,
+    fullAccessBatches: rawFullAccessBatches,
+    allowed_device_count,
+    face_descriptor: rawFaceDescriptor,
+  } = userData;
+  const batch = parseMultipartValue(rawBatch);
+  const accessVideo = parseMultipartValue(rawAccessVideo);
+  const fullAccessBatches = parseMultipartValue(rawFullAccessBatches);
+  const face_descriptor = parseMultipartValue(rawFaceDescriptor);
+  const profileImage = req.file ? `/uploads/user-images/${req.file.filename}` : null;
 
   console.log("accessVideo:", accessVideo);
   console.log("fullAccessBatches:", fullAccessBatches);
@@ -53,6 +69,13 @@ export const createUser = (req, res) => {
     return res.status(400).json({
       message: "All fields are required"
     });
+  }
+
+  const validFaceDescriptor = Array.isArray(face_descriptor)
+    && face_descriptor.length === 128
+    && face_descriptor.every((value) => Number.isFinite(value));
+  if (face_descriptor != null && !validFaceDescriptor) {
+    return res.status(400).json({ message: "Invalid face enrollment data" });
   }
 
   // Convert accessVideo and fullAccessBatches arrays to JSON strings
@@ -87,9 +110,12 @@ export const createUser = (req, res) => {
           accessVideo,
           fullAccessBatches,
           active,
-          allowed_device_count
+          allowed_device_count,
+          Face_status,
+          face_descriptor,
+          profile_image
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'yes', ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'yes', ?, ?, ?, ?)
       `;
 
       db.query(
@@ -102,7 +128,10 @@ export const createUser = (req, res) => {
           role,
           accessVideoValue,
           fullAccessBatchesValue,
-          allowed_device_count
+          allowed_device_count,
+          validFaceDescriptor ? "Enrolled" : "Not Configured",
+          validFaceDescriptor ? JSON.stringify(face_descriptor) : null,
+          profileImage,
         ],
         (err, result) => {
           if (err) {
@@ -130,7 +159,7 @@ export const getUsers = (req, res) => {
   }
 
   db.query(
-    "SELECT id, name, user_name, password, batch, role, active, device_id, accessVideo, fullAccessBatches, allowed_device_count FROM users",
+    "SELECT id, name, user_name, password, batch, role, active, device_id, accessVideo, fullAccessBatches, allowed_device_count, Face_status, profile_image FROM users",
     (err, results) => {
       if (err) return res.status(500).json({ message: "Database Error" });
 
@@ -139,10 +168,66 @@ export const getUsers = (req, res) => {
         batch: safeParse(user.batch),
         accessVideo: safeParse(user.accessVideo),
         fullAccessBatches: safeParse(user.fullAccessBatches),
+        face_status: user.Face_status,
+        face_configured: String(user.Face_status || "").toLowerCase() === "enrolled",
       }));
 
       res.json(parsedResults);
     }
+  );
+};
+
+export const enrollMyFace = (req, res) => {
+  const { face_descriptor } = req.body;
+  const validFaceDescriptor = Array.isArray(face_descriptor)
+    && face_descriptor.length === 128
+    && face_descriptor.every((value) => Number.isFinite(value));
+
+  if (!validFaceDescriptor) {
+    return res.status(400).json({ message: "Invalid face enrollment data" });
+  }
+
+  db.query(
+    "UPDATE users SET face_descriptor = ?, Face_status = 'Enrolled' WHERE id = ?",
+    [JSON.stringify(face_descriptor), req.user.id],
+    (err, result) => {
+      if (err) {
+        console.error("Database Error (face enrollment):", err);
+        return res.status(500).json({ message: "Could not save face enrollment" });
+      }
+      res.json({ message: "Face enrollment saved", face_status: "Enrolled" });
+    },
+  );
+};
+
+export const getMyFaceEnrollmentStatus = (req, res) => {
+  db.query(
+    "SELECT Face_status FROM users WHERE id = ?",
+    [req.user.id],
+    (err, results) => {
+      if (err) {
+        console.error("Database Error (face enrollment status):", err);
+        return res.status(500).json({ message: "Could not load face enrollment status" });
+      }
+      if (results.length === 0) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      return res.json({ face_status: results[0].Face_status || "Not Configured" });
+    },
+  );
+};
+
+export const removeMyFaceEnrollment = (req, res) => {
+  db.query(
+    "UPDATE users SET face_descriptor = NULL, Face_status = 'Not Configured' WHERE id = ?",
+    [req.user.id],
+    (err, result) => {
+      if (err) {
+        console.error("Database Error (remove face enrollment):", err);
+        return res.status(500).json({ message: "Could not remove face enrollment" });
+      }
+      res.json({ message: "Face enrollment removed", face_status: "Not Configured" });
+    },
   );
 };
 
@@ -214,7 +299,25 @@ export const deleteUser = (req, res) => {
 
 export const editUser = (req, res) => {
   const { id } = req.params;
-  const { name, user_name, password, batch, role, active, device_id, accessVideo, fullAccessBatches, allowed_device_count } = req.body;
+  const userData = parseMultipartValue(req.body?.user_data) || req.body || {};
+  const {
+    name,
+    user_name,
+    password,
+    batch: rawBatch,
+    role,
+    active,
+    device_id,
+    accessVideo: rawAccessVideo,
+    fullAccessBatches: rawFullAccessBatches,
+    allowed_device_count,
+    face_descriptor: rawFaceDescriptor,
+  } = userData;
+  const batch = parseMultipartValue(rawBatch);
+  const accessVideo = parseMultipartValue(rawAccessVideo);
+  const fullAccessBatches = parseMultipartValue(rawFullAccessBatches);
+  const face_descriptor = parseMultipartValue(rawFaceDescriptor);
+  const profileImage = req.file ? `/uploads/user-images/${req.file.filename}` : null;
 
   // Debug logs
   console.log("Incoming batch:", batch);
@@ -225,6 +328,14 @@ export const editUser = (req, res) => {
     return res.status(400).json({ message: "Required fields are missing" });
   }
 
+  const hasFaceDescriptor = Object.hasOwn(userData, "face_descriptor");
+  const validFaceDescriptor = Array.isArray(face_descriptor)
+    && face_descriptor.length === 128
+    && face_descriptor.every((value) => Number.isFinite(value));
+  if (hasFaceDescriptor && !validFaceDescriptor) {
+    return res.status(400).json({ message: "Invalid face enrollment data" });
+  }
+
   // Ensure consistent storage as JSON
   const formattedBatch = batch ? (typeof batch === "string" ? batch : JSON.stringify(batch)) : "[]";
   const formattedAccessVideo = accessVideo ? JSON.stringify(accessVideo) : "[]";
@@ -232,13 +343,31 @@ export const editUser = (req, res) => {
 
   const sql = `
     UPDATE users 
-    SET name = ?, user_name = ?, password = ?, batch = ?, role = ?, active = ?, device_id = ?, accessVideo = ?, fullAccessBatches = ?, allowed_device_count = ? 
+    SET name = ?, user_name = ?, password = ?, batch = ?, role = ?, active = ?, device_id = ?, accessVideo = ?, fullAccessBatches = ?, allowed_device_count = ?,
+        face_descriptor = COALESCE(?, face_descriptor),
+        Face_status = IF(? IS NULL, Face_status, 'Enrolled'),
+        profile_image = COALESCE(?, profile_image)
     WHERE id = ?
   `;
 
   db.query(
     sql,
-    [name, user_name, password, formattedBatch, role, active, device_id, formattedAccessVideo, formattedFullAccess, allowed_device_count, id],
+    [
+      name,
+      user_name,
+      password,
+      formattedBatch,
+      role,
+      active,
+      device_id,
+      formattedAccessVideo,
+      formattedFullAccess,
+      allowed_device_count,
+      hasFaceDescriptor ? JSON.stringify(face_descriptor) : null,
+      hasFaceDescriptor ? "Enrolled" : null,
+      profileImage,
+      id,
+    ],
     (err, result) => {
       if (err) {
         console.error("SQL Error:", err);
