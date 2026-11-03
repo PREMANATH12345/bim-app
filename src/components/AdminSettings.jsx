@@ -1,688 +1,407 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
-	Camera,
 	Check,
-	Fingerprint,
 	KeyRound,
-	Laptop,
-	Monitor,
 	Save,
+	Shield,
 	ShieldCheck,
-	Trash2,
-	User,
+	UserCheck,
+	RefreshCw,
+	Info,
+	X,
+	Lock,
+	Laptop,
 } from "lucide-react";
-import { jwtDecode } from "jwt-decode";
 import axios from "axios";
-import { useNavigate } from "react-router-dom";
+import toast from "react-hot-toast";
 import Sidebar from "./Sidebar";
 import TopBar from "./TopBar";
 import AdminMobileNavBar from "./AdminMobileNavBar";
-import { advanceFaceLivenessChallenge, createFaceLivenessChallenge } from "../utils/faceLiveness";
-
-const DEFAULT_SETTINGS = { loginMethod: "password", faceEnabled: false, faceMode: "every-time" };
-let faceApiModulePromise;
-
-const loadFaceApiModels = () => {
-	if (!faceApiModulePromise) {
-		faceApiModulePromise = import("@vladmandic/face-api").then(async (faceapi) => {
-			const modelUrl = "/models";
-			await Promise.all([
-				faceapi.nets.ssdMobilenetv1.loadFromUri(modelUrl),
-				faceapi.nets.faceLandmark68Net.loadFromUri(modelUrl),
-				faceapi.nets.faceRecognitionNet.loadFromUri(modelUrl),
-			]);
-			return faceapi;
-		}).catch((error) => {
-			faceApiModulePromise = null;
-			throw error;
-		});
-	}
-	return faceApiModulePromise;
-};
-
-const getSettingsKey = () => {
-	try {
-		const token = localStorage.getItem("token");
-		const adminId = token ? jwtDecode(token)?.id : null;
-		return `adminAuthSettings_${adminId || "default"}`;
-	} catch {
-		return "adminAuthSettings_default";
-	}
-};
-
-const readSettings = (key) => {
-	try {
-		const stored = JSON.parse(localStorage.getItem(key) || "null");
-		return {
-			...DEFAULT_SETTINGS,
-			...stored,
-		};
-	} catch {
-		return DEFAULT_SETTINGS;
-	}
-};
-
-const getCurrentDeviceId = () => {
-	let deviceId = localStorage.getItem("device_id");
-	if (!deviceId) {
-		deviceId = globalThis.crypto?.randomUUID?.() || `device-${Date.now()}-${Math.random()}`;
-		localStorage.setItem("device_id", deviceId);
-	}
-	return deviceId;
-};
 
 const AdminSettings = () => {
 	const contentRef = useRef(null);
-	const navigate = useNavigate();
-	const videoRef = useRef(null);
-	const cameraStreamRef = useRef(null);
-	const faceApiRef = useRef(null);
-	const detectingRef = useRef(false);
-	const livenessRef = useRef(createFaceLivenessChallenge());
-	const livenessPassedAtRef = useRef(0);
-	const livenessDescriptorRef = useRef(null);
-	const settingsKey = getSettingsKey();
-	const faceDescriptorKey = `${settingsKey}_face_descriptor`;
-	const [settings, setSettings] = useState(() => readSettings(settingsKey));
-	const [selectedLoginMethod, setSelectedLoginMethod] = useState(() => readSettings(settingsKey).loginMethod);
-	const [savedFaceMode, setSavedFaceMode] = useState(() => readSettings(settingsKey).faceMode);
-	const [notice, setNotice] = useState("");
-	const [activeMethod, setActiveMethod] = useState("");
-	const [userName, setUserName] = useState("");
-	const [password, setPassword] = useState("");
-	const [loginLoading, setLoginLoading] = useState(false);
-	const [cameraStream, setCameraStream] = useState(null);
-	const [modelsLoading, setModelsLoading] = useState(false);
-	const [modelsReady, setModelsReady] = useState(false);
-	const [enrollingFace, setEnrollingFace] = useState(false);
-	const [faceStatus, setFaceStatus] = useState("");
-	const [faceEnrolled, setFaceEnrolled] = useState(false);
-	const [trustedDevices, setTrustedDevices] = useState([]);
-	const currentDeviceId = getCurrentDeviceId();
 	const API_URL = import.meta.env.VITE_URL;
 
-	useEffect(() => {
-		const { loginMethod, faceMode, ...localSettings } = settings;
-		localStorage.setItem(settingsKey, JSON.stringify(localSettings));
-	}, [settings, settingsKey]);
+	const [selectedLoginMethod, setSelectedLoginMethod] = useState("password");
+	const [savedLoginMethod, setSavedLoginMethod] = useState("password");
+	const [faceMode, setFaceMode] = useState("every-time");
+	const [savedFaceMode, setSavedFaceMode] = useState("every-time");
+	const [notice, setNotice] = useState("");
+	const [loading, setLoading] = useState(true);
+	const [isSaving, setIsSaving] = useState(false);
 
-	useEffect(() => {
-		let active = true;
-		const token = localStorage.getItem("token");
-		localStorage.removeItem(faceDescriptorKey);
-		axios.get(`${API_URL}/users/me/face-enrollment`, {
-			headers: { Authorization: `Bearer ${token}` },
-		}).then(({ data }) => {
-			if (active) setFaceEnrolled(String(data.face_status).toLowerCase() === "enrolled");
-		}).catch(() => {
-			if (active) setFaceEnrolled(false);
-		});
-		return () => {
-			active = false;
-		};
-	}, [API_URL, faceDescriptorKey]);
+	const hasUnsavedChanges =
+		selectedLoginMethod !== savedLoginMethod || faceMode !== savedFaceMode;
 
+	const isFaceEnabled = selectedLoginMethod !== "password";
+	const isTrustedDeviceEnabled = faceMode === "trusted-device";
+
+	// Fetch current settings on load
 	useEffect(() => {
 		const token = localStorage.getItem("token");
-		axios.get(`${API_URL}/login-method`).then(async ({ data }) => {
-			const legacyMethod = localStorage.getItem("adminLoginMethod");
-			const loginMethod = data.configured
-				? data.loginMethod
-				: ["password", "face", "both"].includes(legacyMethod) ? legacyMethod : "password";
-			setSelectedLoginMethod(loginMethod);
-			const faceMode = data.faceMode === "trusted-device" ? "trusted-device" : "every-time";
-			setSettings((current) => ({ ...current, loginMethod, faceMode }));
-			setSavedFaceMode(faceMode);
-			if (!data.configured && ["password", "face", "both"].includes(legacyMethod)) {
-				await axios.put(
-					`${API_URL}/settings/login-method`,
-					{ loginMethod },
-					{ headers: { Authorization: `Bearer ${token}` } },
-				);
-			}
-		}).catch((error) => {
-			setNotice(error.response?.data?.message || "Could not load the saved login method.");
-		});
+		axios
+			.get(`${API_URL}/login-method`)
+			.then(async ({ data }) => {
+				const legacyMethod = localStorage.getItem("adminLoginMethod");
+				const method = data.configured
+					? data.loginMethod
+					: ["password", "face", "both"].includes(legacyMethod)
+					? legacyMethod
+					: "password";
+				const mode = data.faceMode === "trusted-device" ? "trusted-device" : "every-time";
+
+				setSelectedLoginMethod(method);
+				setSavedLoginMethod(method);
+				setFaceMode(mode);
+				setSavedFaceMode(mode);
+
+				if (!data.configured && ["password", "face", "both"].includes(legacyMethod)) {
+					await axios.put(
+						`${API_URL}/settings/login-method`,
+						{ loginMethod: method, faceMode: mode },
+						{ headers: { Authorization: `Bearer ${token}` } }
+					);
+				}
+			})
+			.catch((error) => {
+				const msg = error.response?.data?.message || "Could not load login settings.";
+				setNotice(msg);
+			})
+			.finally(() => {
+				setLoading(false);
+			});
 	}, [API_URL]);
 
-	useEffect(() => {
-		const token = localStorage.getItem("token");
-		axios.get(`${API_URL}/users/me/trusted-face-devices`, {
-			headers: { Authorization: `Bearer ${token}` },
-		}).then(({ data }) => {
-			setTrustedDevices(Array.isArray(data) ? data : []);
-		}).catch((error) => {
-			setNotice(error.response?.data?.message || "Could not load trusted devices.");
-		});
-	}, [API_URL]);
-
-	useEffect(() => {
-		if (videoRef.current && cameraStream) {
-			videoRef.current.srcObject = cameraStream;
-			videoRef.current.play().catch(() => {});
-		}
-	}, [cameraStream]);
-
-	useEffect(() => () => {
-		cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
-	}, []);
-
-	useEffect(() => {
-		if (!cameraStream || !modelsReady) return undefined;
-		let active = true;
-		const detectFace = async () => {
-			const video = videoRef.current;
-			if (!active || detectingRef.current || !video || video.readyState < 2 || !video.videoWidth) return;
-			detectingRef.current = true;
-			try {
-				const detections = await faceApiRef.current
-					.detectAllFaces(video, new faceApiRef.current.SsdMobilenetv1Options())
-					.withFaceLandmarks()
-					.withFaceDescriptors();
-				if (!active) return;
-				if (detections.length !== 1) {
-					livenessRef.current = createFaceLivenessChallenge();
-					livenessPassedAtRef.current = 0;
-					livenessDescriptorRef.current = null;
-					setFaceStatus(detections.length ? "Only one face can be in frame during enrollment." : "No face detected. Look at the camera and move into the frame.");
-					return;
-				}
-				if (livenessRef.current.complete && Date.now() - livenessPassedAtRef.current > 15000) {
-					livenessRef.current = createFaceLivenessChallenge();
-					livenessPassedAtRef.current = 0;
-					livenessDescriptorRef.current = null;
-				}
-				const challengeWasComplete = livenessRef.current.complete;
-				const liveness = advanceFaceLivenessChallenge(livenessRef.current, detections[0].landmarks);
-				if (liveness.complete && !challengeWasComplete) {
-					livenessDescriptorRef.current = Array.from(detections[0].descriptor);
-					livenessPassedAtRef.current = Date.now();
-				}
-				setFaceStatus(liveness.status);
-			} catch {
-				if (active) setFaceStatus("Face detection failed. Check the camera and model files, then retry.");
-			} finally {
-				detectingRef.current = false;
-			}
-		};
-		const intervalId = window.setInterval(detectFace, 180);
-		detectFace();
-		return () => {
-			active = false;
-			window.clearInterval(intervalId);
-		};
-	}, [cameraStream, faceEnrolled, modelsReady]);
-
-	const stopCamera = () => {
-		cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
-		cameraStreamRef.current = null;
-		setCameraStream(null);
-		livenessRef.current = createFaceLivenessChallenge();
-		livenessPassedAtRef.current = 0;
-		livenessDescriptorRef.current = null;
-	};
-
-	const handleFaceRecognitionToggle = async (enabled) => {
-		setNotice("");
-		if (!enabled) {
-			stopCamera();
-			setModelsReady(false);
-			setFaceStatus("");
-			setSettings((current) => ({ ...current, faceEnabled: false }));
-			return;
-		}
-		if (cameraStreamRef.current && modelsReady) return;
-
-		if (!navigator.mediaDevices?.getUserMedia) {
-			setNotice("Camera access is unavailable. Open this site over HTTPS or localhost and try again.");
-			return;
-		}
-
-		try {
-			if (!cameraStreamRef.current) {
-				const stream = await navigator.mediaDevices.getUserMedia({
-					audio: false,
-					video: { facingMode: { ideal: "user" } },
-				});
-				cameraStreamRef.current = stream;
-				setCameraStream(stream);
-			}
-			setModelsLoading(true);
-			setFaceStatus("Loading face detection, landmark, and recognition models...");
-			faceApiRef.current = await loadFaceApiModels();
-			setModelsReady(true);
-			setSettings((current) => ({ ...current, faceEnabled: true }));
-			setFaceStatus("Models ready. Position your face in the camera.");
-		} catch (error) {
-			if (error.name === "NotAllowedError" || error.name === "NotFoundError" || error.name === "NotReadableError") {
-				const message = error.name === "NotAllowedError"
-					? "Camera permission was denied. Allow camera access in your browser settings, then try again."
-					: "Could not open the camera. Check that it is connected and not being used by another app.";
-				setNotice(message);
-			} else {
-				setNotice("Could not load the face models. Confirm all model files exist in public/models and try again.");
-			}
-			stopCamera();
-			setModelsReady(false);
-			setSettings((current) => ({ ...current, faceEnabled: false }));
-		}
-		setModelsLoading(false);
-	};
-
-	const enrollFace = async () => {
-		const video = videoRef.current;
-		if (!video || video.readyState < 2 || !video.videoWidth || !faceApiRef.current) {
-			setNotice("The camera is not ready yet. Wait for the live preview, then try again.");
-			return;
-		}
-		if (detectingRef.current) {
-			setNotice("Face detection is in progress. Try again in a moment.");
-			return;
-		}
-		if (Date.now() - livenessPassedAtRef.current > 15000 || !livenessDescriptorRef.current) {
-			setFaceStatus("Blink once OR turn your head to either side, then face forward.");
-			setNotice("Complete the live blink or head-turn check before enrolling.");
-			return;
-		}
-
-		detectingRef.current = true;
-		setEnrollingFace(true);
-		setNotice("");
-		try {
-			setFaceStatus("Capturing face from the camera...");
-			const detections = await faceApiRef.current
-				.detectAllFaces(video, new faceApiRef.current.SsdMobilenetv1Options())
-				.withFaceLandmarks()
-				.withFaceDescriptors();
-			if (detections.length !== 1) {
-				setFaceStatus(detections.length ? "Only one face can be in frame during enrollment." : "No face detected. Look at the camera and move into the frame.");
-				setNotice("Exactly one face must be visible during enrollment.");
-				return;
-			}
-			if (Date.now() - livenessPassedAtRef.current > 15000 || !livenessDescriptorRef.current) {
-				setNotice("The liveness check expired. Complete it again before enrolling.");
-				return;
-			}
-			const descriptor = livenessDescriptorRef.current;
-			if (!descriptor) {
-				setFaceStatus("No face detected. Look at the camera and move into the frame.");
-				setNotice("A face must be visible in the camera before it can be enrolled.");
-				return;
-			}
-			const capturedDescriptor = Array.from(descriptor);
-			const token = localStorage.getItem("token");
-			await axios.put(
-				`${API_URL}/users/me/face-enrollment`,
-				{ face_descriptor: capturedDescriptor },
-				{ headers: { Authorization: `Bearer ${token}` } },
-			);
-			localStorage.removeItem(faceDescriptorKey);
-			setFaceEnrolled(true);
-			setFaceStatus("Face captured and enrollment saved.");
-			setNotice("Face enrollment saved for this account.");
-		} catch (error) {
-			setFaceStatus("Face capture or enrollment failed. Try again.");
-			setNotice(error.response?.data?.message || "Could not save face enrollment. Try again.");
-		} finally {
-			detectingRef.current = false;
-			setEnrollingFace(false);
-		}
-	};
-
-	const removeFaceEnrollment = async () => {
-		try {
-			const token = localStorage.getItem("token");
-			await axios.delete(`${API_URL}/users/me/face-enrollment`, {
-				headers: { Authorization: `Bearer ${token}` },
-			});
-			localStorage.removeItem(faceDescriptorKey);
-			setFaceEnrolled(false);
-			setNotice("Face enrollment was removed from this account.");
-		} catch (error) {
-			setNotice(error.response?.data?.message || "Could not remove face enrollment. Try again.");
-		}
-	};
-
-	const handleCredentialLogin = async (event) => {
-		e.preventDefault();
-		setNotice("");
-		setLoginLoading(true);
-		try {
-			let deviceId = localStorage.getItem("device_id");
-			if (!deviceId) {
-				deviceId = globalThis.crypto?.randomUUID?.() || `dev-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-				localStorage.setItem("device_id", deviceId);
-			}
-			const response = await axios.post(`${API_URL}/login`, {
-				user_name: userName,
-				password,
-				device_id: deviceId,
-			});
-			localStorage.setItem("token", response.data.token);
-			if (response.data.role === "admin") {
-				navigate("/admin-dashboard");
-			} else {
-				sessionStorage.setItem("studentActiveTab", "courses");
-				navigate("/student");
-			}
-		} catch (error) {
-			setNotice(error.response?.data?.message || "Login failed. Check your username and password.");
-		} finally {
-			setLoginLoading(false);
-		}
-	};
-
-	const selectFaceMethod = () => {
-		setActiveMethod("face");
-		if (!cameraStreamRef.current || !modelsReady) handleFaceRecognitionToggle(true);
-	};
-
-	const unlinkDevice = async (deviceId) => {
-		try {
-			const token = localStorage.getItem("token");
-			await axios.delete(`${API_URL}/users/me/trusted-face-devices/${deviceId}`, {
-				headers: { Authorization: `Bearer ${token}` },
-			});
-			if (trustedDevices.find((device) => device.id === deviceId)?.device_id === currentDeviceId) {
-				localStorage.removeItem("face_trust_token");
-			}
-			setTrustedDevices((current) => current.filter((device) => device.id !== deviceId));
-			setNotice("Trusted device unlinked.");
-		} catch (error) {
-			setNotice(error.response?.data?.message || "Could not unlink trusted device.");
-		}
-	};
-
-	const linkCurrentDevice = async () => {
-		try {
-			const token = localStorage.getItem("token");
-			const { data } = await axios.post(
-				`${API_URL}/users/me/trusted-face-devices`,
-				{
-					device_id: currentDeviceId,
-					device_name: navigator.userAgent,
-				},
-				{ headers: { Authorization: `Bearer ${token}` } },
-			);
-			localStorage.setItem("face_trust_token", data.faceTrustToken);
-			const devices = await axios.get(`${API_URL}/users/me/trusted-face-devices`, {
-				headers: { Authorization: `Bearer ${token}` },
-			});
-			setTrustedDevices(Array.isArray(devices.data) ? devices.data : []);
-			setNotice(data.message);
-		} catch (error) {
-			setNotice(error.response?.data?.message || "Could not link this device.");
-		}
-	};
-
-	const saveLoginMethod = async () => {
-		const savedSettings = { ...settings, loginMethod: selectedLoginMethod };
+	const saveSettings = async () => {
+		setIsSaving(true);
 		try {
 			const token = localStorage.getItem("token");
 			await axios.put(
 				`${API_URL}/settings/login-method`,
-				{ loginMethod: selectedLoginMethod, faceMode: settings.faceMode },
-				{ headers: { Authorization: `Bearer ${token}` } },
+				{ loginMethod: selectedLoginMethod, faceMode },
+				{ headers: { Authorization: `Bearer ${token}` } }
 			);
-			setSettings(savedSettings);
-			setSavedFaceMode(settings.faceMode);
-			if (settings.faceMode === "every-time") setTrustedDevices([]);
-			setNotice("Login settings saved for students and administrators.");
+
+			setSavedLoginMethod(selectedLoginMethod);
+			setSavedFaceMode(faceMode);
+			localStorage.setItem("adminLoginMethod", selectedLoginMethod);
+
+			setNotice("Login settings saved successfully.");
+			toast.success("Settings saved successfully!");
 		} catch (error) {
-			setNotice(error.response?.data?.message || "Could not save the login method.");
+			const msg = error.response?.data?.message || "Could not save settings. Please try again.";
+			setNotice(msg);
+			toast.error(msg);
+		} finally {
+			setIsSaving(false);
 		}
 	};
 
+	const toggleFaceRecognition = () => {
+		if (isFaceEnabled) {
+			// Disable face recognition -> revert to normal password
+			setSelectedLoginMethod("password");
+		} else {
+			// Enable face recognition -> default to both
+			setSelectedLoginMethod("both");
+		}
+	};
+
+	const toggleTrustedDevice = () => {
+		setFaceMode((prev) => (prev === "trusted-device" ? "every-time" : "trusted-device"));
+	};
+
+	const loginMethods = [
+		{
+			id: "password",
+			title: "Username & Password",
+			badge: "Standard",
+			detail: "Sign in with conventional credentials. Standard security suitable for all users.",
+			icon: KeyRound,
+			gradient: "from-blue-600 to-indigo-600",
+		},
+		{
+			id: "face",
+			title: "Face Recognition",
+			badge: "Biometric AI",
+			detail: "Biometric authentication using real-time facial recognition verification.",
+			icon: UserCheck,
+			gradient: "from-purple-600 to-indigo-600",
+		},
+		{
+			id: "both",
+			title: "Both Login Methods",
+			badge: "Flexible Hybrid",
+			detail: "Allow users to choose between password or facial recognition at the login screen.",
+			icon: ShieldCheck,
+			gradient: "from-emerald-600 to-teal-600",
+		},
+	];
+
 	return (
-		<div className="flex h-screen bg-slate-50">
+		<div className="flex h-screen bg-gray-50">
 			<Sidebar role="admin" />
-			<div className="flex min-w-0 flex-1 flex-col">
+			<div className="flex-1 flex flex-col min-w-0">
 				<TopBar />
 				<main
 					ref={contentRef}
-					className="flex-1 overflow-auto p-4 pb-24 sm:p-6 lg:p-8 lg:pb-8"
+					className="flex-1 p-4 lg:p-8 pb-24 lg:pb-8 bg-slate-50 overflow-auto"
 				>
-					<div className="mx-auto max-w-5xl">
-						<header className="mb-7 border-b border-slate-200 pb-5">
-							<p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Security</p>
-							<h1 className="mt-1 text-2xl font-bold text-slate-900">Login settings</h1>
-							<p className="mt-2 max-w-2xl text-sm text-slate-600">
-								Choose the sign-in methods available to students and administrators.
-							</p>
-						</header>
+					<div className="max-w-7xl mx-auto space-y-6 sm:space-y-8">
+						{/* Header Section */}
+						<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-200">
+							<div className="flex items-center gap-3">
+								<div className="p-2.5 sm:p-3 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 rounded-2xl shadow-lg shadow-indigo-100 text-white flex-shrink-0">
+									<ShieldCheck className="w-6 h-6" />
+								</div>
+								<div>
+									<div className="flex items-center gap-2">
+										<h1 className="text-2xl sm:text-3xl font-bold text-slate-800">
+											Login Settings
+										</h1>
+										<span className="hidden md:inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+											Admin Controls
+										</span>
+									</div>
+									<p className="text-slate-500 text-xs sm:text-sm mt-0.5">
+										Manage authentication methods and biometric sign-in preferences for the platform.
+									</p>
+								</div>
+							</div>
 
+							<div className="flex items-center gap-3 self-end sm:self-auto">
+								{hasUnsavedChanges && (
+									<span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-amber-50 text-amber-800 border border-amber-200 animate-pulse">
+										<span className="w-2 h-2 rounded-full bg-amber-500" />
+										Unsaved changes
+									</span>
+								)}
+								<button
+									type="button"
+									onClick={saveSettings}
+									disabled={!hasUnsavedChanges || isSaving || loading}
+									className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm text-white bg-gradient-to-r from-indigo-600 via-indigo-700 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-md hover:shadow-lg transition-all duration-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+								>
+									{isSaving ? (
+										<RefreshCw className="w-4 h-4 animate-spin" />
+									) : (
+										<Save className="w-4 h-4" />
+									)}
+									<span>{isSaving ? "Saving..." : "Save Settings"}</span>
+								</button>
+							</div>
+						</div>
+
+						{/* Notice / Alert Banner */}
 						{notice && (
-							<div role="status" className="mb-5 border-l-4 border-emerald-600 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-								{notice}
+							<div className="flex items-start gap-3 p-4 rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-50/80 to-blue-50/50 text-indigo-950 text-sm shadow-sm transition-all">
+								<Info className="w-5 h-5 text-indigo-600 shrink-0 mt-0.5" />
+								<div className="flex-1 font-medium leading-relaxed">{notice}</div>
+								<button
+									type="button"
+									onClick={() => setNotice("")}
+									className="text-slate-400 hover:text-slate-600 transition"
+									aria-label="Dismiss notice"
+								>
+									<X className="w-4 h-4" />
+								</button>
 							</div>
 						)}
 
-						<div className="mb-5 flex flex-wrap items-center justify-end gap-3">
-										{selectedLoginMethod === settings.loginMethod && settings.faceMode === savedFaceMode && <span className="text-sm text-slate-500">Current settings are saved.</span>}
-										<button
-											type="button"
-											onClick={saveLoginMethod}
-											disabled={selectedLoginMethod === settings.loginMethod && settings.faceMode === savedFaceMode}
-											className="inline-flex items-center gap-2 bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-										>
-											<Save className="h-4 w-4" aria-hidden="true" />
-											Save login settings
-										</button>
-						</div>
-								<section aria-labelledby="login-methods-title">
-							<div className="mb-3 flex items-center gap-2">
-								<ShieldCheck className="h-5 w-5 text-emerald-700" aria-hidden="true" />
-								<h2 id="login-methods-title" className="text-lg font-semibold text-slate-900">Login Methods</h2>
+						{/* SECTION 1: Login Methods Selection */}
+						<section aria-labelledby="methods-heading">
+							<div className="mb-3 sm:mb-4">
+								<h2 id="methods-heading" className="text-base sm:text-lg font-bold text-slate-800">
+									Authentication Methods
+								</h2>
+								<p className="text-xs sm:text-sm text-slate-500">
+									Choose which login method is available to students and administrators.
+								</p>
 							</div>
 
-							<div className="mb-5 grid gap-3 md:grid-cols-3">
-								{[
-									{ id: "password", title: "Normal Login System", detail: "Username and password", icon: KeyRound },
-									{ id: "face", title: "Face Recognition", detail: "Verify with an enrolled face", icon: User },
-									{ id: "both", title: "Both Login Methods", detail: "Username/password and face recognition", icon: ShieldCheck },
-								].map((method) => {
-									const MethodIcon = method.icon;
-									const selected = selectedLoginMethod === method.id;
+							<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+								{loginMethods.map((method) => {
+									const Icon = method.icon;
+									const isSelected = selectedLoginMethod === method.id;
 									return (
 										<button
 											key={method.id}
 											type="button"
 											onClick={() => setSelectedLoginMethod(method.id)}
-											aria-pressed={selected}
-											className={`relative flex min-h-36 flex-col items-start border p-4 text-left transition ${selected ? "border-emerald-700 bg-emerald-50/60 ring-1 ring-emerald-700" : "border-slate-200 bg-white hover:border-slate-400"}`}
+											className={`group relative text-left p-5 rounded-2xl border transition-all duration-200 flex flex-col justify-between ${
+												isSelected
+													? "border-indigo-600 bg-white ring-2 ring-indigo-500/20 shadow-md shadow-indigo-100/50"
+													: "border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm"
+											}`}
 										>
-											<span className={`mb-4 rounded-md p-2 ${selected ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-700"}`}>
-												<MethodIcon className="h-5 w-5" aria-hidden="true" />
-											</span>
-											<span className="font-semibold text-slate-900">{method.title}</span>
-											<span className="mt-1 text-sm text-slate-600">{method.detail}</span>
-											{selected && <Check className="absolute right-3 top-3 h-4 w-4 text-emerald-700" aria-label="Selected" />}
+											<div>
+												<div className="flex items-start justify-between gap-3 mb-4">
+													<div
+														className={`p-2.5 rounded-xl transition-all ${
+															isSelected
+																? `bg-gradient-to-br ${method.gradient} text-white shadow-md shadow-indigo-200`
+																: "bg-slate-100 text-slate-600 group-hover:bg-slate-200"
+														}`}
+													>
+														<Icon className="w-5 h-5" />
+													</div>
+													<div className="flex items-center gap-1.5">
+														<span className="text-[11px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
+															{method.badge}
+														</span>
+														<div
+															className={`w-5 h-5 rounded-full flex items-center justify-center border transition-all ${
+																isSelected
+																	? "bg-indigo-600 border-indigo-600 text-white"
+																	: "border-slate-300 bg-white"
+															}`}
+														>
+															{isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+														</div>
+													</div>
+												</div>
+												<h3 className="font-bold text-slate-800 text-base mb-1">
+													{method.title}
+												</h3>
+												<p className="text-xs sm:text-sm text-slate-500 leading-relaxed">
+													{method.detail}
+												</p>
+											</div>
+
+											<div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+												<span className={isSelected ? "font-semibold text-indigo-600" : "text-slate-400"}>
+													{isSelected ? "Selected" : "Click to select"}
+												</span>
+												{isSelected && (
+													<span className="h-2 w-2 rounded-full bg-indigo-600 animate-pulse" />
+												)}
+											</div>
 										</button>
 									);
 								})}
 							</div>
-							<div className="divide-y divide-slate-200 border-y border-slate-200 bg-white">
-								{selectedLoginMethod !== "face" && <div>
-									<button
-										type="button"
-										onClick={() => setActiveMethod(activeMethod === "password" ? "" : "password")}
-										aria-expanded={activeMethod === "password"}
-										className="flex w-full items-start gap-4 px-4 py-5 text-left hover:bg-slate-50 sm:px-6"
-									>
-										<span className="rounded-md bg-slate-100 p-2 text-slate-700">
-											<KeyRound className="h-5 w-5" aria-hidden="true" />
-										</span>
-										<span className="min-w-0 flex-1">
-											<span className="flex flex-wrap items-center gap-2">
-												<span className="font-semibold text-slate-900">Username and password</span>
-												<span className="rounded-sm bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">Available</span>
-											</span>
-											<span className="mt-1 block text-sm text-slate-600">Sign in with your existing username and password.</span>
-										</span>
-									</button>
-									{activeMethod === "password" && (
-										<form onSubmit={handleCredentialLogin} autoComplete="off" className="grid max-w-xl gap-4 px-4 pb-6 sm:px-6">
-											<label className="grid gap-1.5 text-sm font-medium text-slate-700">
-												Username
-												<input type="text" name="admin-login-user" autoComplete="off" required value={userName} onChange={(event) => setUserName(event.target.value)} className="w-full border border-slate-300 px-3 py-2.5 text-slate-900 focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-700/20" placeholder="Enter username" />
-											</label>
-											<label className="grid gap-1.5 text-sm font-medium text-slate-700">
-												Password
-												<input type="password" name="admin-login-password" autoComplete="new-password" required value={password} onChange={(event) => setPassword(event.target.value)} className="w-full border border-slate-300 px-3 py-2.5 text-slate-900 focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-700/20" placeholder="Enter password" />
-											</label>
-											<button type="submit" disabled={loginLoading} className="inline-flex w-fit items-center gap-2 bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-700 disabled:cursor-wait disabled:opacity-60">
-												{loginLoading ? "Signing in..." : "Sign in"}
-											</button>
-										</form>
-									)}
-									</div>}
-
-								{selectedLoginMethod !== "password" &&
-								<div className="px-4 py-5 sm:px-6">
-									<div className="flex items-start gap-4">
-										<div className="rounded-md bg-emerald-50 p-2 text-emerald-800">
-											<User className="h-5 w-5" aria-hidden="true" />
-										</div>
-										<div className="min-w-0 flex-1">
-											<button type="button" onClick={selectFaceMethod} aria-expanded={activeMethod === "face"} className="flex w-full flex-wrap items-center justify-between gap-3 text-left">
-												<span>
-													<span className="block font-semibold text-slate-900">Face recognition</span>
-													<span className="mt-1 block text-sm text-slate-600">Open the front camera and start face verification.</span>
-												</span>
-												<span className="inline-flex items-center gap-2 bg-emerald-700 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-800">
-													<Camera className="h-4 w-4" aria-hidden="true" />
-													{cameraStream ? "Camera active" : "Open camera"}
-												</span>
-											</button>
-
-											{activeMethod === "face" && <>
-											<fieldset className="mt-5 grid gap-3 sm:grid-cols-2">
-												<label className={`flex cursor-pointer gap-3 border p-4 ${settings.faceMode === "every-time" ? "border-emerald-700 bg-emerald-50/60" : "border-slate-200"}`}>
-													<input
-														type="radio"
-														name="face-mode"
-														value="every-time"
-														checked={settings.faceMode === "every-time"}
-														onChange={() => setSettings((current) => ({ ...current, faceMode: "every-time" }))}
-														className="mt-1 accent-emerald-700"
-													/>
-													<span>
-														<span className="block text-sm font-semibold text-slate-900">Every sign-in</span>
-														<span className="mt-1 block text-sm text-slate-600">Ask for face verification each time you sign in.</span>
-													</span>
-												</label>
-												<label className={`flex cursor-pointer gap-3 border p-4 ${settings.faceMode === "trusted-device" ? "border-emerald-700 bg-emerald-50/60" : "border-slate-200"}`}>
-													<input
-														type="radio"
-														name="face-mode"
-														value="trusted-device"
-														checked={settings.faceMode === "trusted-device"}
-														onChange={() => setSettings((current) => ({ ...current, faceMode: "trusted-device" }))}
-														className="mt-1 accent-emerald-700"
-													/>
-													<span>
-														<span className="block text-sm font-semibold text-slate-900">Single-time on linked devices</span>
-														<span className="mt-1 block text-sm text-slate-600">Verify once, then trust that browser until it is unlinked.</span>
-													</span>
-												</label>
-											</fieldset>
-											{cameraStream && (
-												<div className="mt-5 max-w-sm">
-													<video
-														ref={videoRef}
-														autoPlay
-														muted
-														playsInline
-														aria-label="Front camera preview"
-														className="aspect-video w-full bg-slate-950 object-cover"
-													/>
-													<div className="mt-2 flex items-center justify-between gap-3">
-														<p className="text-xs text-slate-600">{modelsLoading ? "Loading models..." : faceStatus || "Preparing face recognition..."}</p>
-														<button type="button" onClick={() => handleFaceRecognitionToggle(false)} className="text-sm font-medium text-rose-700 hover:underline">
-															Stop camera
-														</button>
-													</div>
-													<div className="mt-3 flex flex-wrap gap-2">
-														<button
-															type="button"
-															onClick={enrollFace}
-															disabled={!modelsReady || modelsLoading || enrollingFace}
-															className="bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-														>
-															{enrollingFace ? "Capturing face..." : faceEnrolled ? "Capture and update face" : "Capture and enroll face"}
-														</button>
-														{faceEnrolled && (
-															<button
-																type="button"
-																onClick={removeFaceEnrollment}
-																className="border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-															>
-																Remove enrolled face
-															</button>
-														)}
-													</div>
-												</div>
-											)}
-											{!cameraStream && (
-												<p className="mt-4 text-sm text-slate-600">Select Open camera to allow camera access and initialize face recognition.</p>
-											)}
-											</>}
-										</div>
-									</div>
-								</div>}
-							</div>
 						</section>
 
-						<section aria-labelledby="linked-devices-title" className="mt-8">
-							<div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-								<div>
-									<h2 id="linked-devices-title" className="text-lg font-semibold text-slate-900">Linked devices</h2>
-									<p className="mt-1 text-sm text-slate-600">Link this browser for single-time sign-in. Only one browser can be linked to this account.</p>
-								</div>
-								{settings.faceMode === "trusted-device" && selectedLoginMethod !== "password" && (
-									<button
-										type="button"
-										onClick={linkCurrentDevice}
-										disabled={savedFaceMode !== "trusted-device" || selectedLoginMethod !== settings.loginMethod}
-										className="inline-flex items-center gap-2 bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-									>
-										<Laptop className="h-4 w-4" aria-hidden="true" />
-										Link this device
-									</button>
-								)}
+						{/* SECTION 2: Enable / Disable Options */}
+						<section aria-labelledby="toggles-heading" className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 sm:p-6 lg:p-7 space-y-6">
+							<div>
+								<h2 id="toggles-heading" className="text-base sm:text-lg font-bold text-slate-800">
+									Enable / Disable Options
+								</h2>
+								<p className="text-xs sm:text-sm text-slate-500">
+									Quickly toggle facial recognition and trusted device verification settings.
+								</p>
 							</div>
 
-							<div className="divide-y divide-slate-200 border-y border-slate-200 bg-white">
-								{trustedDevices.length ? trustedDevices.map((device) => (
-									<div key={device.id} className="flex flex-wrap items-center gap-3 px-4 py-4 sm:px-6">
-										<Monitor className="h-5 w-5 shrink-0 text-slate-500" aria-hidden="true" />
-										<div className="min-w-0 flex-1">
-											<p className="truncate text-sm font-medium text-slate-900">
-												{device.device_name}{device.device_id === currentDeviceId ? " (this device)" : ""}
-											</p>
-											<p className="mt-1 text-xs text-slate-500">
-												Last used {device.last_used_at ? new Date(device.last_used_at).toLocaleString() : "date unavailable"}
+							<div className="divide-y divide-slate-100">
+								{/* Option 1: Face Recognition Enable / Disable */}
+								<div className="py-4 sm:py-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+									<div className="flex items-start gap-3.5">
+										<div className="p-2.5 rounded-xl bg-purple-50 text-purple-600 shrink-0 mt-0.5">
+											<UserCheck className="w-5 h-5" />
+										</div>
+										<div>
+											<div className="flex items-center gap-2">
+												<h3 className="text-sm font-bold text-slate-800">
+													Face Recognition Login
+												</h3>
+												<span
+													className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold ${
+														isFaceEnabled
+															? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+															: "bg-slate-100 text-slate-600 border border-slate-200"
+													}`}
+												>
+													{isFaceEnabled ? "Enabled" : "Disabled"}
+												</span>
+											</div>
+											<p className="text-xs sm:text-sm text-slate-500 mt-1 leading-relaxed max-w-xl">
+												Allow administrators and students to authenticate using biometric face recognition. When disabled, only username and password can be used.
 											</p>
 										</div>
+									</div>
+
+									<div className="flex items-center gap-3 self-end sm:self-auto shrink-0">
 										<button
 											type="button"
-											onClick={() => unlinkDevice(device.id)}
-											aria-label={`Unlink ${device.device_name}`}
-											className="inline-flex items-center gap-2 px-2 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50"
+											role="switch"
+											aria-checked={isFaceEnabled}
+											onClick={toggleFaceRecognition}
+											className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2 ${
+												isFaceEnabled ? "bg-indigo-600" : "bg-slate-300"
+											}`}
 										>
-											<Trash2 className="h-4 w-4" aria-hidden="true" />
-											Unlink
+											<span
+												className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+													isFaceEnabled ? "translate-x-5" : "translate-x-0"
+												}`}
+											/>
 										</button>
 									</div>
-								)) : (
-									<p className="px-4 py-6 text-sm text-slate-500 sm:px-6">No linked devices.</p>
-								)}
+								</div>
+
+								{/* Option 2: Trusted Device (Single-Time Verification) Enable / Disable */}
+								<div className={`py-4 sm:py-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-opacity ${
+									isFaceEnabled ? "opacity-100" : "opacity-50"
+								}`}>
+									<div className="flex items-start gap-3.5">
+										<div className="p-2.5 rounded-xl bg-blue-50 text-blue-600 shrink-0 mt-0.5">
+											<Laptop className="w-5 h-5" />
+										</div>
+										<div>
+											<div className="flex items-center gap-2">
+												<h3 className="text-sm font-bold text-slate-800">
+													Trusted Device Mode (Single-Time Verification)
+												</h3>
+												<span
+													className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold ${
+														isTrustedDeviceEnabled && isFaceEnabled
+															? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+															: "bg-slate-100 text-slate-600 border border-slate-200"
+													}`}
+												>
+													{isTrustedDeviceEnabled && isFaceEnabled ? "Enabled" : "Disabled"}
+												</span>
+											</div>
+											<p className="text-xs sm:text-sm text-slate-500 mt-1 leading-relaxed max-w-xl">
+												When enabled, user verifies their face once and the device is remembered with a secure token. When disabled, face verification is required every time.
+											</p>
+										</div>
+									</div>
+
+									<div className="flex items-center gap-3 self-end sm:self-auto shrink-0">
+										<button
+											type="button"
+											role="switch"
+											disabled={!isFaceEnabled}
+											aria-checked={isTrustedDeviceEnabled}
+											onClick={toggleTrustedDevice}
+											className={`relative inline-flex h-7 w-12 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2 ${
+												!isFaceEnabled
+													? "bg-slate-200 cursor-not-allowed"
+													: isTrustedDeviceEnabled
+													? "bg-indigo-600 cursor-pointer"
+													: "bg-slate-300 cursor-pointer"
+											}`}
+										>
+											<span
+												className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+													isTrustedDeviceEnabled ? "translate-x-5" : "translate-x-0"
+												}`}
+											/>
+										</button>
+									</div>
+								</div>
 							</div>
 						</section>
 
-						<p className="mt-6 border-l-4 border-amber-500 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">
-							Login methods, face sign-in mode, face enrollment, and trusted browsers are stored in the database. A trusted browser is linked only after successful face verification.
-						</p>
+						{/* Security Note Footnote */}
+						<div className="p-4 rounded-2xl bg-indigo-50/50 border border-indigo-100/80 flex items-start gap-3">
+							<Shield className="w-5 h-5 text-indigo-600 shrink-0 mt-0.5" />
+							<p className="text-xs text-slate-600 leading-relaxed">
+								Selected login configurations apply instantly across the platform for students and administrators upon clicking <strong className="text-slate-800">Save Settings</strong>.
+							</p>
+						</div>
 					</div>
 				</main>
 				<AdminMobileNavBar scrollContainerRef={contentRef} />
@@ -692,4 +411,3 @@ const AdminSettings = () => {
 };
 
 export default AdminSettings;
-
